@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0b0d12">
+<title>Anzeige – SVEvents</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root { --c1: #1f3fbf; --c2: #14286f; --ink: #ffffff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; cursor: none; }
+  body.show-cursor { cursor: default; }
+  #stage { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between;
+    padding: min(5vw, 7vh); background: linear-gradient(135deg, var(--c1), var(--c2)); }
+  #stage[hidden] { display: none; }
+  header { display: flex; align-items: center; gap: min(2vw, 3vh); min-height: 0; }
+  #logo { height: min(10vh, 9vw); width: auto; max-width: 30vw; object-fit: contain; }
+  #title { font-size: min(5.2vw, 8vh); font-weight: 700; line-height: 1.1; letter-spacing: -.01em; overflow-wrap: anywhere; }
+  #loc { font-size: min(2.4vw, 3.6vh); opacity: .8; margin-top: .2em; }
+  main { text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 0; }
+  #label { font-size: min(3.4vw, 5vh); text-transform: uppercase; letter-spacing: .14em; opacity: .85; }
+  #big { font-size: min(14vw, 26vh); font-weight: 800; line-height: 1.02; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  #big.small { font-size: min(9vw, 16vh); }
+  #sub { font-size: min(3.6vw, 5.4vh); margin-top: .5em; opacity: .95; max-width: 90vw; overflow-wrap: anywhere; }
+  footer { display: flex; justify-content: space-between; align-items: flex-end; gap: 2vw; font-size: min(2.4vw, 3.6vh); opacity: .85; }
+  #dot { display: inline-block; width: .6em; height: .6em; border-radius: 50%; background: #4ade80; margin-right: .5em; }
+  #dot.off { background: #f87171; }
+  #msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 8vw;
+    font-size: min(4vw, 6vh); background: #0b0d12; }
+  /* Testbild */
+  #test { position: fixed; inset: 0; display: none; background: #111; color: #fff; }
+  #test .bars { position: absolute; left: 6%; right: 6%; top: 12%; height: 46%; display: flex; }
+  #test .bars i { flex: 1; }
+  #test .grid { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.18) 1px, transparent 1px); background-size: 10% 10%; }
+  #test .frame { position: absolute; inset: 3%; border: .4vmin solid #fff; }
+  #test .info { position: absolute; left: 0; right: 0; bottom: 6%; text-align: center; font-size: min(3.4vw, 6vh); font-variant-numeric: tabular-nums; }
+  #test .info b { display: block; font-size: min(7vw, 12vh); }
+  #test .sw { position: absolute; left: 6%; right: 6%; top: 62%; height: 8%; display: flex; }
+  #test .sw i { flex: 1; }
+  #test .tl { position: absolute; top: 4%; left: 50%; transform: translateX(-50%); font-size: min(2.4vw, 4vh); background: #111; padding: 0 1em; }
+  #test .circ { position: absolute; left: 50%; top: 50%; width: 44vmin; height: 44vmin; margin: -22vmin 0 0 -22vmin; border: .4vmin solid #fff; border-radius: 50%; opacity: .6; }
+</style>
+</head>
+<body>
+<div id="stage" hidden>
+  <header>
+    <img id="logo" alt="" hidden>
+    <div><div id="title"></div><div id="loc"></div></div>
+  </header>
+  <main>
+    <div id="label"></div>
+    <div id="big">–</div>
+    <div id="sub"></div>
+  </main>
+  <footer><span><span id="dot" class="off"></span><span id="clock"></span></span><span id="foot"></span></footer>
+</div>
+<div id="msg"></div>
+<div id="test">
+  <div class="grid"></div>
+  <div class="bars" id="bars"></div>
+  <div class="sw" id="sw"></div>
+  <div class="circ"></div>
+  <div class="frame"></div>
+  <div class="tl">TESTBILD</div>
+  <div class="info"><b id="tRes"></b><span id="tSub"></span></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const q = new URLSearchParams(location.search);
+  const TOKEN = (q.get('t') || '').trim();
+  const POLL_MS = 5000;
+  const hexOk = (h) => /^#[0-9a-fA-F]{6}$/.test(h || '');
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const lum = (h) => { const c = rgb(h).map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const mix = (a, b, k) => '#' + rgb(a).map((v, i) => Math.round(v * (1 - k) + rgb(b)[i] * k).toString(16).padStart(2, '0')).join('');
+  const p2 = (n) => String(n).padStart(2, '0');
+
+  let data = null, offset = 0, ok = false, forceTest = q.get('test') === '1';
+
+  function show(msg) { $('msg').textContent = msg; $('msg').style.display = 'flex'; $('stage').hidden = true; }
+
+  // ---- Testbild ----
+  const BARS = ['#c0c0c0', '#c0c000', '#00c0c0', '#00c000', '#c000c0', '#c00000', '#0000c0'];
+  $('bars').innerHTML = BARS.map((c) => '<i style="background:' + c + '"></i>').join('');
+  function buildSwatches(c1, c2) { $('sw').innerHTML = [c1, c2, '#ffffff', '#808080', '#000000'].map((c) => '<i style="background:' + c + '"></i>').join(''); }
+
+  function applyTheme(ev) {
+    const c1 = hexOk(ev.accent) ? ev.accent : '#1f3fbf';
+    const c2 = hexOk(ev.accent2) ? ev.accent2 : mix(c1, '#000000', 0.35);
+    document.documentElement.style.setProperty('--c1', c1);
+    document.documentElement.style.setProperty('--c2', c2);
+    document.documentElement.style.setProperty('--ink', lum(mix(c1, c2, 0.5)) > 0.4 ? '#0b0d12' : '#ffffff');
+    buildSwatches(c1, c2);
+    const lg = $('logo');
+    if (/^https:\/\//.test(ev.logo_url || '')) { if (lg.getAttribute('src') !== ev.logo_url) lg.src = ev.logo_url; lg.hidden = false; lg.onerror = () => { lg.hidden = true; }; }
+    else lg.hidden = true;
+  }
+
+  // Dauer als "T + 1 Tag 02:03:04" bzw. "02:03:04"
+  function dur(ms) {
+    let s = Math.max(0, Math.floor(ms / 1000));
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    return (d ? d + (d === 1 ? ' Tag ' : ' Tage ') : '') + p2(Math.floor(s / 3600)) + ':' + p2(Math.floor((s % 3600) / 60)) + ':' + p2(s % 60);
+  }
+
+  function render() {
+    const nowD = new Date(Date.now() + offset);
+    $('clock').textContent = p2(nowD.getHours()) + ':' + p2(nowD.getMinutes()) + ':' + p2(nowD.getSeconds());
+    $('dot').className = ok ? '' : 'off';
+    const test = forceTest || (data && data.mode === 'test');
+    $('test').style.display = test ? 'block' : 'none';
+    if (test) {
+      $('tRes').textContent = window.innerWidth + ' × ' + window.innerHeight;
+      $('tSub').textContent = (data ? data.event.name : 'SVEvents') + ' · ' + $('clock').textContent + ' · Seitenverhältnis ' + (window.innerWidth / window.innerHeight).toFixed(2);
+    }
+    if (!data) return;
+    const ev = data.event, cfg = data.config || {};
+    const t0 = ev.t0 ? new Date(ev.t0).getTime() : null;
+    $('title').textContent = cfg.title || ev.name;
+    $('loc').textContent = ev.location || '';
+    const free = data.capacity > 0 ? Math.max(0, data.capacity - data.sold) : null;
+    const showFree = cfg.show_free !== false && free != null;
+    const duringS = Number(cfg.during_s) > 0 ? Number(cfg.during_s) : 21600;
+    const big = $('big');
+    big.classList.remove('small');
+    const freeText = free === 0 ? 'Ausverkauft' : free === 1 ? 'Noch 1 Platz frei' : 'Noch ' + free + ' Plätze frei';
+    if (t0 == null) {
+      $('label').textContent = ''; big.textContent = free != null && showFree ? String(free) : '–'; $('sub').textContent = showFree ? 'Plätze frei' : '';
+    } else {
+      const rel = nowD.getTime() - t0;
+      if (rel < 0) {
+        $('label').textContent = 'Beginn in';
+        big.textContent = dur(-rel); if (/Tag/.test(big.textContent)) big.classList.add('small');
+        $('sub').textContent = [cfg.before_text, showFree ? freeText : ''].filter(Boolean).join(' · ');
+        $('foot').textContent = 'T − ' + dur(-rel);
+      } else if (rel < duringS * 1000) {
+        $('label').textContent = cfg.during_text || 'Heute bei uns';
+        if (showFree) { big.textContent = free === 0 ? 'Ausverkauft' : String(free); if (free === 0) big.classList.add('small'); $('sub').textContent = free === 0 ? '' : free === 1 ? 'Platz frei' : 'Plätze frei'; }
+        else { big.textContent = dur(rel); $('sub').textContent = ''; }
+        if (cfg.show_inside) $('sub').textContent = ($('sub').textContent ? $('sub').textContent + ' · ' : '') + data.inside + ' Gäste im Haus';
+        $('foot').textContent = 'T + ' + dur(rel);
+      } else {
+        $('label').textContent = '';
+        big.textContent = cfg.after_text || 'Danke fürs Dabeisein!'; big.classList.add('small');
+        $('sub').textContent = '';
+        $('foot').textContent = 'T + ' + dur(rel);
+      }
+    }
+  }
+
+  async function poll(sb) {
+    try {
+      const r = await sb.rpc('public_screen', { p_token: TOKEN });
+      if (r.error) throw r.error;
+      if (!r.data) { if (!data) show('Diese Anzeige gibt es nicht oder sie ist ausgeschaltet.'); else { data = null; show('Diese Anzeige ist ausgeschaltet.'); } ok = true; return; }
+      data = r.data; ok = true;
+      offset = new Date(data.now).getTime() - Date.now();
+      applyTheme(data.event);
+      $('msg').style.display = 'none'; $('stage').hidden = false;
+    } catch (e) { ok = false; }
+  }
+
+  async function start() {
+    if (!TOKEN && !forceTest) { show('Kein Anzeige-Link. Bitte den vollständigen Link aus dem Admin-Bereich verwenden.'); return; }
+    if (!TOKEN && forceTest) { $('stage').hidden = true; setInterval(render, 500); render(); return; }
+    const cfg = window.SV_CONFIG || {};
+    const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    await poll(sb);
+    setInterval(() => poll(sb), POLL_MS);
+    setInterval(render, 250);
+    render();
+  }
+
+  // Bedienung: Doppelklick / F = Vollbild, T = Testbild umschalten
+  const fs = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); };
+  document.addEventListener('dblclick', fs);
+  document.addEventListener('keydown', (e) => { if (e.key === 'f' || e.key === 'F') fs(); if (e.key === 't' || e.key === 'T') { forceTest = !forceTest; render(); } });
+  let mt = null;
+  document.addEventListener('mousemove', () => { document.body.classList.add('show-cursor'); clearTimeout(mt); mt = setTimeout(() => document.body.classList.remove('show-cursor'), 2500); });
+  window.addEventListener('resize', render);
+  start();
+})();
+</script>
+</body>
+</html>

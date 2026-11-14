@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Aktionen – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head noprint">
+    <div>
+      <h1>Aktionen</h1>
+      <p class="muted">Verkaufsaktionen mit Bestellungen und Klassenliste, zum Beispiel die Nikolaus-Aktion.</p>
+    </div>
+    <div class="actions"><button class="btn" type="button" id="newCamp" hidden>Neue Aktion</button></div>
+  </div>
+
+  <div id="none" class="empty" hidden>
+    <b>Keine Aktion vorhanden</b>
+    <span id="noneText">Dir ist noch keine Aktion zugewiesen. Wende dich an einen Admin.</span>
+  </div>
+
+  <div id="main" hidden>
+    <div class="toolbar noprint">
+      <div class="field"><label for="campSel">Aktion</label><select id="campSel"></select></div>
+    </div>
+    <p id="campInfo" class="small muted noprint" style="margin:-6px 0 16px"></p>
+
+    <div class="tabs noprint" role="tablist">
+      <button type="button" role="tab" data-tab="orders" aria-selected="true">Bestellungen</button>
+      <button type="button" role="tab" data-tab="classes" aria-selected="false">Klassenliste</button>
+      <button type="button" role="tab" data-tab="manage" aria-selected="false" id="manageTab" hidden>Produkte und Einstellungen</button>
+    </div>
+
+    <!-- Bestellungen -->
+    <div id="tab-orders">
+      <div class="figures" id="figures" style="margin-bottom:24px"></div>
+      <div class="panel" style="max-width:640px; margin-bottom:30px">
+        <h2 style="margin-bottom:14px">Bestellung hinzufügen</h2>
+        <div class="notice" id="saleNotice" hidden></div>
+        <form id="orderForm" autocomplete="off">
+          <div class="field"><span class="label">Produkt</span><div class="choices" id="prodChoices"></div></div>
+          <div class="grid-2">
+            <div class="field"><label for="oRecipient">Empfänger</label><input id="oRecipient" required maxlength="120"></div>
+            <div class="field"><label for="oClass">Klasse des Empfängers</label><input id="oClass" required maxlength="20" list="classOptions"><datalist id="classOptions"></datalist></div>
+          </div>
+          <div class="field"><label for="oSender">Absender (optional)</label><input id="oSender" maxlength="120"></div>
+          <div class="field"><label for="oMessage">Grußtext (optional)</label><textarea id="oMessage" maxlength="300"></textarea></div>
+          <label class="check"><input id="oPaid" type="checkbox" checked> Bereits bezahlt</label>
+          <button class="btn lg block" type="submit" id="orderBtn">Bestellung speichern</button>
+        </form>
+      </div>
+
+      <div class="section-head"><h2>Alle Bestellungen</h2></div>
+      <div class="toolbar">
+        <div class="field"><label for="fSearch">Suche</label><input id="fSearch" type="search" placeholder="Empfänger oder Absender"></div>
+        <div class="field"><label for="fClass">Klasse</label><select id="fClass"></select></div>
+        <div class="field"><label for="fStatus">Status</label>
+          <select id="fStatus">
+            <option value="">Alle</option>
+            <option value="unpaid">Nicht bezahlt</option>
+            <option value="undelivered">Nicht ausgeliefert</option>
+          </select>
+        </div>
+      </div>
+      <div id="orderTable"></div>
+    </div>
+
+    <!-- Klassenliste -->
+    <div id="tab-classes" hidden>
+      <div class="toolbar noprint">
+        <div class="field"><label for="cSel">Klasse</label><select id="cSel"></select></div>
+        <div class="field"><label for="cStatus">Anzeigen</label>
+          <select id="cStatus">
+            <option value="">Alle Bestellungen</option>
+            <option value="undelivered">Noch auszuliefern</option>
+          </select>
+        </div>
+        <button class="btn secondary" type="button" id="printBtn">Drucken</button>
+      </div>
+      <div id="classGroups"></div>
+    </div>
+
+    <!-- Verwaltung (nur Admin) -->
+    <div id="tab-manage" hidden>
+      <form id="campForm" class="panel" style="max-width:640px">
+        <h2 style="margin-bottom:14px">Einstellungen</h2>
+        <div class="field"><label for="cName">Name</label><input id="cName" required maxlength="120"></div>
+        <div class="field"><label for="cDesc">Beschreibung (optional)</label><textarea id="cDesc" maxlength="500"></textarea></div>
+        <div class="grid-2">
+          <div class="field"><label for="cFrom">Bestellungen ab</label><input id="cFrom" type="datetime-local"></div>
+          <div class="field"><label for="cUntil">Bestellungen bis</label><input id="cUntil" type="datetime-local"></div>
+        </div>
+        <div class="hint" style="margin:-6px 0 14px">Nur Verkäufer sind an diesen Zeitraum gebunden. Admins können immer Bestellungen eintragen.</div>
+        <div class="actions">
+          <button class="btn" type="submit">Speichern</button>
+          <button class="btn secondary" type="button" id="delCamp">Aktion löschen</button>
+        </div>
+      </form>
+      <section class="section">
+        <div class="section-head"><h2>Produkte</h2><button class="btn secondary sm" type="button" id="addProd">Produkt hinzufügen</button></div>
+        <div id="prodTable"></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<dialog id="campDlg">
+  <form class="dlg" id="campNewForm">
+    <div class="dlg-head"><h2>Neue Aktion</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="nName">Name</label><input id="nName" required maxlength="120" placeholder="z. B. Nikolaus-Aktion"></div>
+      <div class="field"><label for="nDesc">Beschreibung (optional)</label><textarea id="nDesc" maxlength="500"></textarea></div>
+      <div class="grid-2">
+        <div class="field"><label for="nFrom">Bestellungen ab</label><input id="nFrom" type="datetime-local"></div>
+        <div class="field"><label for="nUntil">Bestellungen bis</label><input id="nUntil" type="datetime-local"></div>
+      </div>
+      <div class="hint">Produkte und Preise legst du danach unter „Produkte und Einstellungen“ an.</div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Anlegen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="prodDlg">
+  <form class="dlg" id="prodForm">
+    <div class="dlg-head"><h2 id="prodDlgTitle">Produkt</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="pName">Name</label><input id="pName" required maxlength="80" placeholder="z. B. Nikolaus klein"></div>
+      <div class="field"><label for="pPrice">Preis in Euro</label><input id="pPrice" type="number" min="0" step="0.5" required></div>
+      <div class="hint">Preisänderungen gelten nur für neue Bestellungen. Bestehende behalten ihren Preis.</div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="orderDlg">
+  <form class="dlg" id="orderEditForm">
+    <div class="dlg-head"><h2>Bestellung bearbeiten</h2></div>
+    <div class="dlg-body">
+      <div class="grid-2">
+        <div class="field"><label for="eRecipient">Empfänger</label><input id="eRecipient" required maxlength="120"></div>
+        <div class="field"><label for="eClass">Klasse</label><input id="eClass" required maxlength="20"></div>
+      </div>
+      <div class="field"><label for="eSender">Absender</label><input id="eSender" maxlength="120"></div>
+      <div class="field"><label for="eMessage">Grußtext</label><textarea id="eMessage" maxlength="300"></textarea></div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'aktionen', need: 'campaigns' });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const isAdmin = me.role === 'admin';
+  const { $, esc, fmt, money } = SV;
+
+  let campaigns = [], campaign = null, products = [], orders = [];
+  let editingProduct = null, editingOrder = null;
+
+  const natural = (a, b) => String(a).localeCompare(String(b), 'de', { numeric: true, sensitivity: 'base' });
+
+  // Klassen vereinheitlichen: "6A" und "6a" sind dieselbe Gruppe
+  function classList() {
+    const m = new Map();
+    orders.forEach((o) => { const k = o.recipient_class.toLowerCase(); if (!m.has(k)) m.set(k, o.recipient_class); });
+    return Array.from(m.entries()).sort((a, b) => natural(a[1], b[1]));
+  }
+
+  function saleOpen() {
+    if (isAdmin || !campaign) return { ok: true };
+    const now = Date.now();
+    if (campaign.sale_start && now < new Date(campaign.sale_start).getTime()) return { ok: false, text: 'Bestellungen sind erst ab ' + fmt(campaign.sale_start) + ' möglich.' };
+    if (campaign.sale_end && now > new Date(campaign.sale_end).getTime()) return { ok: false, text: 'Der Bestellzeitraum ist vorbei.' };
+    return { ok: true };
+  }
+
+  // ---------- Laden ----------
+  async function loadCampaigns(selectId) {
+    const r = await sb.from('campaigns').select('*').order('created_at', { ascending: false });
+    if (r.error) throw r.error;
+    campaigns = r.data;
+    $('newCamp').hidden = !isAdmin;
+    if (!campaigns.length) {
+      $('main').hidden = true;
+      $('none').hidden = false;
+      $('noneText').textContent = isAdmin ? 'Lege mit „Neue Aktion“ die erste an, zum Beispiel die Nikolaus-Aktion.' : 'Dir ist noch keine Aktion zugewiesen. Wende dich an einen Admin.';
+      return;
+    }
+    $('none').hidden = true;
+    $('main').hidden = false;
+    const saved = selectId || SV.store.get('sv.campaign');
+    $('campSel').innerHTML = campaigns.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('');
+    if (campaigns.some((c) => c.id === saved)) $('campSel').value = saved;
+    $('manageTab').hidden = !isAdmin;
+    await loadCampaign();
+  }
+
+  async function loadCampaign() {
+    const id = $('campSel').value;
+    SV.store.set('sv.campaign', id);
+    campaign = campaigns.find((c) => c.id === id);
+    const res = await Promise.all([
+      sb.from('campaign_products').select('*').eq('campaign_id', id).order('created_at'),
+      sb.from('campaign_orders').select('*').eq('campaign_id', id).order('created_at', { ascending: false })
+    ]);
+    if (res[0].error) throw res[0].error;
+    if (res[1].error) throw res[1].error;
+    products = res[0].data;
+    orders = res[1].data;
+    renderAll();
+  }
+
+  // ---------- Darstellung ----------
+  function renderAll() {
+    const win = [campaign.sale_start ? 'ab ' + fmt(campaign.sale_start) : '', campaign.sale_end ? 'bis ' + fmt(campaign.sale_end) : ''].filter(Boolean).join(' ');
+    $('campInfo').textContent = [(campaign.description || '').replace(/[.\s]+$/, ''), win ? 'Bestellungen ' + win : ''].filter(Boolean).join('. ');
+    renderOrdersTab();
+    renderClasses();
+    if (isAdmin) renderManage();
+  }
+
+  function renderOrdersTab() {
+    const paid = orders.filter((o) => o.paid);
+    const sum = (list) => list.reduce((s, o) => s + Number(o.price), 0);
+    const open = orders.filter((o) => !o.paid);
+    const delivered = orders.filter((o) => o.delivered).length;
+    $('figures').innerHTML =
+      '<div class="figure"><b>' + orders.length + '</b><span>Bestellungen</span></div>' +
+      '<div class="figure"><b>' + esc(money(sum(paid))) + '</b><span>bezahlt (' + paid.length + ')</span></div>' +
+      '<div class="figure"><b>' + esc(money(sum(open))) + '</b><span>noch offen (' + open.length + ')</span></div>' +
+      '<div class="figure"><b>' + delivered + ' von ' + orders.length + '</b><span>ausgeliefert</span></div>';
+
+    const s = saleOpen();
+    $('saleNotice').hidden = s.ok;
+    $('saleNotice').textContent = s.text || '';
+    const keep = document.querySelector('input[name="prod"]:checked');
+    $('prodChoices').innerHTML = products.length ? products.map((p, i) =>
+      '<label class="choice"><input type="radio" name="prod" value="' + p.id + '"' + ((keep ? keep.value === p.id : i === 0) ? ' checked' : '') + '>' +
+      '<span><b>' + esc(p.name) + '</b><b class="num">' + esc(money(p.price)) + '</b></span></label>').join('')
+      : '<p class="muted">' + (isAdmin ? 'Noch kein Produkt. Lege es unter „Produkte und Einstellungen“ an.' : 'Für diese Aktion gibt es noch kein Produkt.') + '</p>';
+    $('orderBtn').disabled = !s.ok || !products.length;
+
+    const cl = classList();
+    $('classOptions').innerHTML = cl.map((c) => '<option value="' + esc(c[1]) + '">').join('');
+    const fc = $('fClass').value;
+    $('fClass').innerHTML = '<option value="">Alle Klassen</option>' + cl.map((c) => '<option value="' + esc(c[0]) + '">' + esc(c[1]) + '</option>').join('');
+    if (cl.some((c) => c[0] === fc)) $('fClass').value = fc;
+    renderOrderTable();
+  }
+
+  function flagBox(o, flag) {
+    return '<input type="checkbox" data-flag="' + flag + '" data-id="' + o.id + '"' + (o[flag] ? ' checked' : '') + ' aria-label="' + (flag === 'paid' ? 'Bezahlt' : 'Ausgeliefert') + '">';
+  }
+
+  function renderOrderTable() {
+    if (!orders.length) { $('orderTable').innerHTML = '<div class="empty"><b>Noch keine Bestellungen</b>Trage oben die erste ein.</div>'; return; }
+    const q = $('fSearch').value.trim().toLowerCase();
+    const fc = $('fClass').value;
+    const fs = $('fStatus').value;
+    const list = orders.filter((o) => {
+      if (fc && o.recipient_class.toLowerCase() !== fc) return false;
+      if (fs === 'unpaid' && o.paid) return false;
+      if (fs === 'undelivered' && o.delivered) return false;
+      if (q && (o.recipient_name + ' ' + (o.sender_name || '')).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+    if (!list.length) { $('orderTable').innerHTML = '<div class="empty"><b>Nichts gefunden</b>Passe Suche oder Filter an.</div>'; return; }
+    $('orderTable').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Empfänger</th><th>Klasse</th><th>Absender</th><th>Produkt</th><th>Bezahlt</th><th>Ausgeliefert</th>' +
+      (isAdmin ? '<th></th>' : '') + '</tr></thead><tbody>' +
+      list.map((o) => '<tr><td>' + esc(o.recipient_name) + (o.message ? '<div class="order-msg">' + esc(o.message) + '</div>' : '') + '</td><td>' + esc(o.recipient_class) +
+        '</td><td>' + esc(o.sender_name || '') + '</td><td>' + esc(o.product_name) + '<div class="muted small">' + esc(money(o.price)) + '</div></td><td>' + flagBox(o, 'paid') +
+        '</td><td>' + flagBox(o, 'delivered') + '</td>' +
+        (isAdmin ? '<td class="cell-actions"><button class="btn secondary sm" data-edit="' + o.id + '">Bearbeiten</button><button class="btn secondary sm" data-del="' + o.id + '">Löschen</button></td>' : '') +
+        '</tr>').join('') + '</tbody></table></div>';
+  }
+
+  function renderClasses() {
+    const cl = classList();
+    const keep = $('cSel').value;
+    $('cSel').innerHTML = '<option value="">Alle Klassen</option>' + cl.map((c) => '<option value="' + esc(c[0]) + '">' + esc(c[1]) + '</option>').join('');
+    if (cl.some((c) => c[0] === keep)) $('cSel').value = keep;
+    const only = $('cSel').value;
+    const undelivered = $('cStatus').value === 'undelivered';
+    let html = '';
+    cl.forEach((c) => {
+      if (only && c[0] !== only) return;
+      const all = orders.filter((o) => o.recipient_class.toLowerCase() === c[0]);
+      const list = all.filter((o) => !undelivered || !o.delivered).sort((a, b) => natural(a.recipient_name, b.recipient_name));
+      if (!list.length) return;
+      const done = all.filter((o) => o.delivered).length;
+      const unpaid = all.filter((o) => !o.paid).length;
+      html += '<section class="class-group"><h3>' + esc(campaign.name) + ', Klasse ' + esc(c[1]) + '</h3>' +
+        '<div class="count">' + all.length + (all.length === 1 ? ' Bestellung' : ' Bestellungen') + ', ' + done + ' ausgeliefert' + (unpaid ? ', ' + unpaid + ' noch nicht bezahlt' : '') + '</div>' +
+        '<div class="tablewrap"><table class="data"><thead><tr><th>Empfänger</th><th>Produkt</th><th>Absender</th><th>Grußtext</th><th>Bezahlt</th><th>Ausgeliefert</th></tr></thead><tbody>' +
+        list.map((o) => '<tr><td>' + esc(o.recipient_name) + '</td><td>' + esc(o.product_name) + '</td><td>' + esc(o.sender_name || '') + '</td><td class="order-msg">' + esc(o.message || '') +
+          '</td><td>' + (o.paid ? '<span class="badge ok">bezahlt</span>' : '<span class="badge warn">offen</span>') + '</td><td>' + flagBox(o, 'delivered') + '</td></tr>').join('') +
+        '</tbody></table></div></section>';
+    });
+    $('classGroups').innerHTML = html || '<div class="empty"><b>Keine Bestellungen</b>' + (undelivered ? 'Alles ist ausgeliefert.' : 'Sobald Bestellungen eingetragen sind, erscheinen sie hier nach Klassen.') + '</div>';
+  }
+
+  function renderManage() {
+    $('cName').value = campaign.name;
+    $('cDesc').value = campaign.description || '';
+    $('cFrom').value = SV.toLocalInput(campaign.sale_start);
+    $('cUntil').value = SV.toLocalInput(campaign.sale_end);
+    $('prodTable').innerHTML = products.length
+      ? '<div class="tablewrap"><table class="data"><thead><tr><th>Produkt</th><th class="right">Preis</th><th>Bestellungen</th><th></th></tr></thead><tbody>' +
+        products.map((p) => '<tr><td>' + esc(p.name) + '</td><td class="right num">' + esc(money(p.price)) + '</td><td class="num">' +
+          orders.filter((o) => o.product_id === p.id).length + '</td><td class="cell-actions"><button class="btn secondary sm" data-pedit="' + p.id + '">Bearbeiten</button>' +
+          '<button class="btn secondary sm" data-pdel="' + p.id + '">Löschen</button></td></tr>').join('') + '</tbody></table></div>'
+      : '<p class="muted">Noch kein Produkt. Ohne Produkt kann nichts bestellt werden.</p>';
+  }
+
+  // ---------- Tabs ----------
+  function setTab(t) {
+    SV.$$('.tabs [data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
+    ['orders', 'classes', 'manage'].forEach((n) => { $('tab-' + n).hidden = n !== t; });
+  }
+  SV.$$('.tabs [data-tab]').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  $('campSel').addEventListener('change', async () => { try { await loadCampaign(); } catch (e) { SV.fail(e); } });
+  ['fSearch', 'fClass', 'fStatus'].forEach((id) => $(id).addEventListener('input', renderOrderTable));
+  ['cSel', 'cStatus'].forEach((id) => $(id).addEventListener('input', renderClasses));
+  $('printBtn').addEventListener('click', () => window.print());
+  SV.$$('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
+
+  // ---------- Bestellung anlegen ----------
+  $('orderForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sel = document.querySelector('input[name="prod"]:checked');
+    if (!sel) return SV.toast('Bitte ein Produkt wählen.', 'bad');
+    await SV.busy($('orderBtn'), async () => {
+      const r = await sb.rpc('create_order', {
+        p_campaign_id: campaign.id, p_product_id: sel.value,
+        p_recipient: $('oRecipient').value, p_class: $('oClass').value,
+        p_sender: $('oSender').value.trim() || null, p_message: $('oMessage').value.trim() || null
+      });
+      if (r.error) return SV.fail(r.error);
+      let row = r.data;
+      if ($('oPaid').checked) {
+        const f = await sb.rpc('set_order_flag', { p_order_id: row.id, p_flag: 'paid', p_value: true });
+        if (f.error) SV.fail(f.error); else row = f.data;
+      }
+      orders.unshift(row);
+      $('oRecipient').value = ''; $('oClass').value = ''; $('oMessage').value = '';
+      renderAll();
+      SV.toast('Bestellung gespeichert');
+      $('oRecipient').focus();
+    });
+  });
+
+  // ---------- Häkchen setzen (bezahlt, ausgeliefert) ----------
+  async function toggleFlag(box) {
+    const val = box.checked;
+    box.disabled = true;
+    const r = await sb.rpc('set_order_flag', { p_order_id: box.dataset.id, p_flag: box.dataset.flag, p_value: val });
+    if (r.error) { box.checked = !val; box.disabled = false; return SV.fail(r.error); }
+    const i = orders.findIndex((o) => o.id === box.dataset.id);
+    if (i >= 0) orders[i] = r.data;
+    renderAll();
+  }
+  ['orderTable', 'classGroups'].forEach((id) => $(id).addEventListener('change', (e) => {
+    if (e.target.dataset && e.target.dataset.flag) toggleFlag(e.target);
+  }));
+
+  // ---------- Bestellung bearbeiten und löschen (Admin) ----------
+  $('orderTable').addEventListener('click', async (e) => {
+    const ed = e.target.closest('[data-edit]');
+    const dl = e.target.closest('[data-del]');
+    if (ed) {
+      editingOrder = orders.find((o) => o.id === ed.dataset.edit);
+      $('eRecipient').value = editingOrder.recipient_name;
+      $('eClass').value = editingOrder.recipient_class;
+      $('eSender').value = editingOrder.sender_name || '';
+      $('eMessage').value = editingOrder.message || '';
+      $('orderDlg').showModal();
+    }
+    if (dl) {
+      const o = orders.find((x) => x.id === dl.dataset.del);
+      const ok = await SV.confirmBox('Die Bestellung für ' + o.recipient_name + ' (Klasse ' + o.recipient_class + ') wird gelöscht.', { title: 'Bestellung löschen?', ok: 'Löschen', danger: true });
+      if (!ok) return;
+      const r = await sb.from('campaign_orders').delete().eq('id', o.id);
+      if (r.error) return SV.fail(r.error);
+      orders = orders.filter((x) => x.id !== o.id);
+      renderAll();
+      SV.toast('Bestellung gelöscht');
+    }
+  });
+
+  $('orderEditForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const upd = {
+      recipient_name: $('eRecipient').value.trim(),
+      recipient_class: $('eClass').value.replace(/\s+/g, ''),
+      sender_name: $('eSender').value.trim() || null,
+      message: $('eMessage').value.trim() || null
+    };
+    await SV.busy(e.submitter, async () => {
+      const r = await sb.from('campaign_orders').update(upd).eq('id', editingOrder.id).select().single();
+      if (r.error) return SV.fail(r.error);
+      const i = orders.findIndex((o) => o.id === editingOrder.id);
+      orders[i] = r.data;
+      $('orderDlg').close();
+      renderAll();
+      SV.toast('Gespeichert');
+    });
+  });
+
+  // ---------- Aktion anlegen, ändern, löschen (Admin) ----------
+  $('newCamp').addEventListener('click', () => {
+    $('nName').value = ''; $('nDesc').value = ''; $('nFrom').value = ''; $('nUntil').value = '';
+    $('campDlg').showModal();
+    $('nName').focus();
+  });
+
+  $('campNewForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const row = { name: $('nName').value.trim(), description: $('nDesc').value.trim() || null, sale_start: SV.fromLocalInput($('nFrom').value), sale_end: SV.fromLocalInput($('nUntil').value) };
+    if (row.sale_start && row.sale_end && row.sale_end <= row.sale_start) return SV.toast('„Bestellungen bis“ muss nach „ab“ liegen.', 'bad');
+    await SV.busy(e.submitter, async () => {
+      const r = await sb.from('campaigns').insert(row).select().single();
+      if (r.error) return SV.fail(r.error);
+      $('campDlg').close();
+      SV.toast('Aktion angelegt. Lege jetzt die Produkte an.');
+      await loadCampaigns(r.data.id);
+      setTab('manage');
+    });
+  });
+
+  $('campForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const row = { name: $('cName').value.trim(), description: $('cDesc').value.trim() || null, sale_start: SV.fromLocalInput($('cFrom').value), sale_end: SV.fromLocalInput($('cUntil').value) };
+    if (row.sale_start && row.sale_end && row.sale_end <= row.sale_start) return SV.toast('„Bestellungen bis“ muss nach „ab“ liegen.', 'bad');
+    await SV.busy(e.submitter, async () => {
+      const r = await sb.from('campaigns').update(row).eq('id', campaign.id);
+      if (r.error) return SV.fail(r.error);
+      SV.toast('Gespeichert');
+      await loadCampaigns(campaign.id);
+      setTab('manage');
+    });
+  });
+
+  $('delCamp').addEventListener('click', async () => {
+    const ok = await SV.confirmBox('„' + campaign.name + '“ wird mit allen Produkten und allen ' + orders.length + ' Bestellungen gelöscht. Das lässt sich nicht rückgängig machen.',
+      { title: 'Aktion löschen?', ok: 'Aktion löschen', danger: true });
+    if (!ok) return;
+    const r = await sb.from('campaigns').delete().eq('id', campaign.id);
+    if (r.error) return SV.fail(r.error);
+    SV.toast('Aktion gelöscht');
+    SV.store.set('sv.campaign', '');
+    await loadCampaigns();
+    setTab('orders');
+  });
+
+  // ---------- Produkte (Admin) ----------
+  function openProduct(p) {
+    editingProduct = p;
+    $('prodDlgTitle').textContent = p ? 'Produkt bearbeiten' : 'Neues Produkt';
+    $('pName').value = p ? p.name : '';
+    $('pPrice').value = p ? Number(p.price) : '';
+    $('prodDlg').showModal();
+    $('pName').focus();
+  }
+  $('addProd').addEventListener('click', () => openProduct(null));
+  $('prodTable').addEventListener('click', async (e) => {
+    const ed = e.target.closest('[data-pedit]');
+    const dl = e.target.closest('[data-pdel]');
+    if (ed) openProduct(products.find((p) => p.id === ed.dataset.pedit));
+    if (dl) {
+      const p = products.find((x) => x.id === dl.dataset.pdel);
+      const ok = await SV.confirmBox('Das Produkt „' + p.name + '“ wird gelöscht. Bestehende Bestellungen behalten Namen und Preis.', { title: 'Produkt löschen?', ok: 'Löschen', danger: true });
+      if (!ok) return;
+      const r = await sb.from('campaign_products').delete().eq('id', p.id);
+      if (r.error) return SV.fail(r.error);
+      await loadCampaign();
+      SV.toast('Produkt gelöscht');
+    }
+  });
+  $('prodForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const row = { name: $('pName').value.trim(), price: parseFloat($('pPrice').value) || 0 };
+    await SV.busy(e.submitter, async () => {
+      const r = editingProduct
+        ? await sb.from('campaign_products').update(row).eq('id', editingProduct.id)
+        : await sb.from('campaign_products').insert(Object.assign({ campaign_id: campaign.id }, row));
+      if (r.error) return SV.fail(r.error);
+      $('prodDlg').close();
+      await loadCampaign();
+      SV.toast('Gespeichert');
+    });
+  });
+
+  try { await loadCampaigns(); } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

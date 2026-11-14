@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Gästeliste – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Gästeliste</h1>
+      <p class="muted" id="sub">Alle verkauften Tickets eines Events.</p>
+    </div>
+    <div class="actions"><button class="btn secondary" type="button" id="purgeBtn" hidden>Stornierte löschen</button><button class="btn secondary" type="button" id="csvBtn" hidden>Als CSV exportieren</button></div>
+  </div>
+
+  <div id="none" class="empty" hidden>
+    <b>Kein Event freigegeben</b>
+    Dir ist noch kein Event zugewiesen. Wende dich an einen Admin.
+  </div>
+
+  <div id="main" hidden>
+    <div class="toolbar">
+      <div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div>
+      <div class="field"><label for="q">Suche</label><input id="q" type="search" placeholder="Name, Klasse, E-Mail"></div>
+      <div class="field"><label for="typeSel">Ticketart</label><select id="typeSel"></select></div>
+      <div class="field"><label for="statusSel">Status</label>
+        <select id="statusSel">
+          <option value="">Alle</option>
+          <option value="inside">Drin</option>
+          <option value="outside">Noch nicht drin oder draußen</option>
+          <option value="cancelled">Storniert</option>
+        </select>
+      </div>
+    </div>
+    <div class="figures" id="figures" style="margin-bottom:18px"></div>
+    <div id="table"></div>
+  </div>
+</main>
+
+<dialog id="mailDlg">
+  <form class="dlg" id="mailForm" autocomplete="off">
+    <div class="dlg-head"><h2>E-Mail eintragen</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="mailIn">E-Mail-Adresse des Gastes</label><input id="mailIn" type="email" required maxlength="160"></div>
+      <p class="hint">Das Ticket wird nach dem Speichern sofort an diese Adresse geschickt.</p>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="mailCancel">Abbrechen</button><button class="btn" type="submit" id="mailGo">Speichern und senden</button></div>
+  </form>
+</dialog>
+
+<dialog id="qrDlg">
+  <div class="dlg">
+    <div class="dlg-body" id="qrDlgBox"></div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="qrDlgClose">Schließen</button><button class="btn" type="button" id="qrDlgSave">Ticket speichern</button></div>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'gaeste', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const isAdmin = me.role === 'admin';
+  const { $, esc, fmt } = SV;
+
+  let events = [];
+  let rows = [];
+  let sellers = {};
+  let dlgTicket = null;
+  const STATUS = { outside: ['noch nicht drin', ''], inside: ['drin', 'ok'], cancelled: ['storniert', 'bad'] };
+
+  function currentEvent() { return events.find((e) => e.id === $('eventSel').value); }
+
+  async function load() {
+    const id = $('eventSel').value;
+    const r = await sb.from('tickets')
+      .select('id, token, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, sold_by, ticket_types(name, counts_to_capacity)')
+      .eq('event_id', id).order('created_at', { ascending: false });
+    if (r.error) throw r.error;
+    rows = r.data;
+    const names = Array.from(new Set(rows.map((t) => (t.ticket_types ? t.ticket_types.name : '')))).filter(Boolean).sort();
+    const keep = $('typeSel').value;
+    $('typeSel').innerHTML = '<option value="">Alle</option>' + names.map((n) => '<option>' + esc(n) + '</option>').join('');
+    if (names.indexOf(keep) >= 0) $('typeSel').value = keep;
+    render();
+  }
+
+  function filtered() {
+    const q = $('q').value.trim().toLowerCase();
+    const ty = $('typeSel').value;
+    const st = $('statusSel').value;
+    return rows.filter((t) => {
+      if (ty && (!t.ticket_types || t.ticket_types.name !== ty)) return false;
+      if (st === 'outside' ? t.status === 'cancelled' || t.status === 'inside' : st && t.status !== st) return false;
+      if (q && (t.guest_name + ' ' + (t.guest_class || '') + ' ' + (t.guest_email || '')).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    const ev = currentEvent();
+    const active = rows.filter((t) => t.status !== 'cancelled');
+    const counted = active.filter((t) => t.ticket_types && t.ticket_types.counts_to_capacity).length;
+    const inside = rows.filter((t) => t.status === 'inside').length;
+    const cancelled = rows.length - active.length;
+    $('purgeBtn').hidden = !(isAdmin && cancelled);
+    $('purgeBtn').textContent = 'Stornierte löschen (' + cancelled + ')';
+    $('figures').innerHTML =
+      '<div class="figure"><b>' + active.length + '</b><span>Tickets</span></div>' +
+      (isAdmin && ev ? '<div class="figure"><b>' + counted + ' von ' + ev.capacity + '</b><span>Plätze verkauft</span></div>' : '') +
+      '<div class="figure"><b>' + inside + '</b><span>aktuell drin</span></div>' +
+      (cancelled ? '<div class="figure"><b>' + cancelled + '</b><span>storniert</span></div>' : '');
+
+    const list = filtered();
+    if (!rows.length) { $('table').innerHTML = '<div class="empty"><b>Noch keine Tickets</b>Sobald Tickets verkauft sind, erscheinen sie hier.</div>'; return; }
+    if (!list.length) { $('table').innerHTML = '<div class="empty"><b>Nichts gefunden</b>Passe Suche oder Filter an.</div>'; return; }
+    $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Gast</th><th>Ticketart</th><th>Status</th>' +
+      '<th>Verkauft</th><th></th></tr></thead><tbody>' +
+      list.map((t) => {
+        const s = STATUS[t.status] || [t.status, ''];
+        return '<tr><td>' + esc(t.guest_name) +
+          (t.guest_class || t.guest_email ? '<div class="muted small">' + [t.guest_class ? 'Klasse ' + esc(t.guest_class) : '', esc(t.guest_email || '')].filter(Boolean).join(', ') + (t.mail_sent_at ? ' <span class="badge ok">E-Mail gesendet</span>' : '') + '</div>' : '') +
+          '</td><td>' + esc(t.ticket_types ? t.ticket_types.name : '') + '</td>' +
+          '<td><span class="badge ' + s[1] + '">' + s[0] + '</span></td>' +
+          '<td class="nowrap">' + esc(fmt(t.created_at)) + (isAdmin && sellers[t.sold_by] ? '<div class="muted small">von ' + esc(sellers[t.sold_by]) + '</div>' : '') + '</td><td class="cell-actions">' +
+          '<button class="btn secondary sm" data-act="qr" data-id="' + t.id + '">QR-Code</button>' +
+          (t.status !== 'cancelled' && t.guest_email ? '<button class="btn secondary sm" data-act="mail" data-id="' + t.id + '">' + (t.mail_sent_at ? 'Erneut senden' : 'E-Mail senden') + '</button>' : '') +
+          (t.status !== 'cancelled' && !t.guest_email && isAdmin ? '<button class="btn secondary sm" data-act="addmail" data-id="' + t.id + '">E-Mail eintragen</button>' : '') +
+          (isAdmin && t.status === 'inside' ? '<button class="btn secondary sm" data-act="reset" data-id="' + t.id + '">Als draußen markieren</button>' : '') +
+          (isAdmin && t.status !== 'cancelled' ? '<button class="btn secondary sm" data-act="cancel" data-id="' + t.id + '">Stornieren</button>' : '') +
+          (isAdmin && t.status === 'cancelled' ? '<button class="btn secondary sm" data-act="restore" data-id="' + t.id + '">Wiederherstellen</button>' : '') +
+          (isAdmin && t.status === 'cancelled' ? '<button class="btn danger sm" data-act="purge" data-id="' + t.id + '">Endgültig löschen</button>' : '') +
+          '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  async function setStatus(id, status) {
+    const r = await sb.from('tickets').update({ status: status }).eq('id', id);
+    if (r.error) return SV.fail(r.error);
+    await load();
+  }
+
+  function ticketData(t) {
+    const ev = currentEvent();
+    return { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+  }
+  async function mailTicket(t, btn) {
+    await SV.busy(btn, async () => {
+      const r = await SV.sendTicketMail(sb, t.id, ticketData(t));
+      if (r.ok) { SV.toast('E-Mail an ' + t.guest_email + ' gesendet'); await load(); }
+      else SV.toast('E-Mail nicht gesendet: ' + r.error, 'bad');
+    });
+  }
+
+  // Admin: E-Mail nachtragen und gleich senden
+  let mailTarget = null;
+  $('mailCancel').addEventListener('click', () => $('mailDlg').close());
+  $('mailForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const addr = $('mailIn').value.trim();
+    if (!mailTarget || !addr) return;
+    await SV.busy($('mailGo'), async () => {
+      const u = await sb.from('tickets').update({ guest_email: addr }).eq('id', mailTarget.id);
+      if (u.error) { SV.fail(u.error); return; }
+      const t = Object.assign({}, mailTarget, { guest_email: addr });
+      $('mailDlg').close();
+      const r = await SV.sendTicketMail(sb, t.id, ticketData(t));
+      SV.toast(r.ok ? 'E-Mail an ' + addr + ' gesendet' : 'E-Mail nicht gesendet: ' + r.error, r.ok ? undefined : 'bad');
+      await load();
+    });
+  });
+
+  $('table').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const t = rows.find((x) => x.id === b.dataset.id);
+    try {
+      if (b.dataset.act === 'qr') {
+        const ev = currentEvent();
+        dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+        SV.showTicket($('qrDlgBox'), dlgTicket);
+        $('qrDlg').showModal();
+      }
+      if (b.dataset.act === 'mail') await mailTicket(t, b);
+      if (b.dataset.act === 'addmail') {
+        mailTarget = t;
+        $('mailIn').value = '';
+        $('mailDlg').showModal();
+        $('mailIn').focus();
+      }
+      if (b.dataset.act === 'cancel') {
+        const ok = await SV.confirmBox('Das Ticket von ' + t.guest_name + ' wird ungültig. Der Platz wird wieder frei.', { title: 'Ticket stornieren?', ok: 'Stornieren', danger: true });
+        if (ok) { await setStatus(t.id, 'cancelled'); SV.toast('Ticket storniert'); }
+      }
+      if (b.dataset.act === 'purge') {
+        const ok = await SV.confirmBox('Das Ticket von ' + t.guest_name + ' wird komplett gelöscht, samt Einträgen im Scan-Protokoll. Das lässt sich nicht rückgängig machen.', { title: 'Ticket endgültig löschen?', ok: 'Löschen', danger: true });
+        if (ok) {
+          const r = await sb.rpc('delete_ticket', { p_ticket_id: t.id });
+          if (r.error) SV.fail(r.error); else { SV.toast('Ticket gelöscht'); await load(); }
+        }
+      }
+      if (b.dataset.act === 'restore') { await setStatus(t.id, 'outside'); SV.toast('Ticket wiederhergestellt'); }
+      if (b.dataset.act === 'reset') { await setStatus(t.id, 'outside'); SV.toast('Als draußen markiert'); }
+    } catch (err) { SV.fail(err); }
+  });
+
+  ['q', 'typeSel', 'statusSel'].forEach((id) => $(id).addEventListener('input', render));
+  $('purgeBtn').addEventListener('click', async () => {
+    const ev = currentEvent();
+    const n = rows.filter((t) => t.status === 'cancelled').length;
+    if (!ev || !n) return;
+    const ok = await SV.confirmBox(n + ' stornierte Tickets von „' + ev.name + '“ werden komplett gelöscht, samt Einträgen im Scan-Protokoll. Das lässt sich nicht rückgängig machen.', { title: 'Alle stornierten Tickets löschen?', ok: 'Löschen', danger: true });
+    if (!ok) return;
+    await SV.busy($('purgeBtn'), async () => {
+      const r = await sb.rpc('delete_cancelled_tickets', { p_event_id: ev.id });
+      if (r.error) SV.fail(r.error); else { SV.toast(r.data + ' Tickets gelöscht'); await load(); }
+    });
+  });
+  $('qrDlgClose').addEventListener('click', () => $('qrDlg').close());
+  $('qrDlgSave').addEventListener('click', () => { if (dlgTicket) SV.saveTicketPng(dlgTicket); });
+
+  $('csvBtn').addEventListener('click', () => {
+    const ev = currentEvent();
+    const data = [['Name', 'Klasse', 'E-Mail', 'Ticketart', 'Status', 'Verkauft von', 'Verkauft am']];
+    filtered().forEach((t) => data.push([t.guest_name, t.guest_class || '', t.guest_email || '', t.ticket_types ? t.ticket_types.name : '',
+      (STATUS[t.status] || [t.status])[0], sellers[t.sold_by] || '', fmt(t.created_at)]));
+    SV.downloadCsv('gaesteliste-' + (ev ? ev.name.replace(/[^\wäöüÄÖÜß-]+/g, '_') : 'event') + '.csv', data);
+  });
+
+  try {
+    events = await SV.loadEvents();
+    if (!events.length) { $('none').hidden = false; return; }
+    if (isAdmin) {
+      $('csvBtn').hidden = false;
+      const p = await sb.from('profiles').select('id, name');
+      if (!p.error) p.data.forEach((x) => { sellers[x.id] = x.name; });
+    } else {
+      $('sub').textContent = 'Gäste der Ticketarten, die du verkaufen darfst.';
+    }
+    SV.fillEventSelect($('eventSel'), events);
+    $('main').hidden = false;
+    $('eventSel').addEventListener('change', async () => { try { await load(); } catch (e) { SV.fail(e); } });
+    await load();
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

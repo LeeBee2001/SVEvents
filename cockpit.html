@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Cockpit – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Cockpit</h1>
+      <p class="muted">Alles zu einem Event auf einen Blick.</p>
+    </div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.<div style="margin-top:12px"><a class="btn" href="events.html">Zu den Events</a></div></div>
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+    <div class="hero">
+      <img class="hero-logo" id="heroLogo" alt="" hidden>
+      <div class="kicker" id="heroName"></div>
+      <div class="countdown" id="countdown" aria-live="off">–</div>
+      <div class="when" id="heroWhen"></div>
+      <div class="when" id="nextLine" hidden style="margin-top:6px"></div>
+      <div class="hero-actions">
+        <button class="btn secondary sm" type="button" id="t0Btn">T0 festlegen</button>
+        <a class="btn secondary sm" id="gLink" href="gaeste.html">Gästeliste</a>
+        <a class="btn secondary sm" id="eLink" href="einlass.html">Einlass</a>
+        <a class="btn secondary sm" href="insights.html">Insights</a>
+      </div>
+    </div>
+    <div id="eventBody"></div>
+  </div>
+  <div id="campaigns"></div>
+</main>
+
+<dialog id="t0Dlg">
+  <form class="dlg" id="t0Form" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 style="margin:0 0 12px">T0 festlegen</h3>
+      <div class="field"><label for="t0Input">Datum und Uhrzeit</label><input id="t0Input" type="datetime-local" step="1"></div>
+      <div class="hint">Auf T0 beziehen sich Countdown und Ablauf. Leer lassen: Dann gilt die Startzeit des Events.</div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="t0Cancel">Abbrechen</button><button class="btn" type="submit" id="t0Ok">Speichern</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'cockpit', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, money, fmt, $ } = SV;
+  let events = [], cur = null, timer = null, runItems = [];
+
+  const t0Of = (ev) => (ev.t0 || ev.starts_at) ? new Date(ev.t0 || ev.starts_at).getTime() : null;
+
+  function tick() {
+    if (!cur) return;
+    const t0 = t0Of(cur);
+    const el = $('countdown');
+    if (t0 == null) { el.textContent = 'Noch kein Termin'; el.classList.remove('past'); return; }
+    const diff = t0 - SV.serverNow();
+    el.textContent = SV.fmtT(diff);
+    el.classList.toggle('past', diff <= 0);
+    const nl = $('nextLine');
+    const rel = Math.floor((SV.serverNow() - t0) / 1000);
+    const next = runItems.find((i) => i.offset_s > rel);
+    nl.hidden = !next;
+    if (next) {
+      const s = next.offset_s - rel, p = (n) => String(n).padStart(2, '0');
+      nl.textContent = 'Nächster Punkt in ' + p(Math.floor(s / 3600)) + ':' + p(Math.floor((s % 3600) / 60)) + ':' + p(s % 60) + ' · ' + next.title;
+    }
+  }
+
+  async function renderEvent() {
+    const ev = cur;
+    $('heroName').textContent = ev.name;
+    const hl = $('heroLogo');
+    hl.hidden = !ev.logo_url;
+    if (ev.logo_url) hl.src = ev.logo_url;
+    const t0 = t0Of(ev);
+    $('heroWhen').textContent = t0 == null ? 'Lege T0 oder eine Startzeit fest, damit hier der Countdown läuft.'
+      : (ev.t0 ? 'T0: ' : 'Start: ') + fmt(new Date(t0).toISOString()) + (ev.location ? ' · ' + ev.location : '');
+    $('t0Btn').textContent = ev.t0 ? 'T0 ändern' : 'T0 festlegen';
+    const ri = await sb.from('run_items').select('offset_s, title').eq('event_id', ev.id).order('offset_s');
+    runItems = ri.error ? [] : ri.data;
+    tick();
+    const [typesRes, ticketRes, costRes, stRes] = await Promise.all([
+      sb.from('ticket_types').select('*').eq('event_id', ev.id).order('created_at'),
+      sb.from('tickets').select('status, ticket_type_id').eq('event_id', ev.id),
+      sb.from('event_costs').select('planned, amount').eq('event_id', ev.id),
+      sb.from('stations').select('id').eq('event_id', ev.id)
+    ]);
+    let openReports = 0;
+    const stIds = (stRes.data || []).map((x) => x.id);
+    if (stIds.length) {
+      const rr = await sb.from('station_reports').select('id').in('station_id', stIds).is('resolved_at', null);
+      openReports = (rr.data || []).length;
+    }
+    if (typesRes.error) throw typesRes.error;
+    if (ticketRes.error) throw ticketRes.error;
+    if (costRes.error) throw costRes.error;
+    if (cur !== ev) return;   // inzwischen anderes Event gewählt
+    const types = typesRes.data, rows = ticketRes.data || [];
+    const byType = {}, typeById = {};
+    types.forEach((t) => { byType[t.id] = 0; typeById[t.id] = t; });
+    let counted = 0, inside = 0, revenue = 0, cancelled = 0;
+    rows.forEach((t) => {
+      if (t.status === 'cancelled') { cancelled++; return; }
+      const ty = typeById[t.ticket_type_id];
+      if (!ty) return;
+      byType[ty.id]++;
+      revenue += Number(ty.price);
+      if (ty.counts_to_capacity) counted++;
+      if (t.status === 'inside') inside++;
+    });
+    const pct = ev.capacity > 0 ? Math.min(100, Math.round((counted / ev.capacity) * 100)) : 0;
+    const planned = costRes.data.reduce((a, c) => a + Number(c.planned || 0), 0);
+    const actual = costRes.data.reduce((a, c) => a + Number(c.amount == null ? (c.planned || 0) : c.amount), 0);
+    const hasCosts = costRes.data.length > 0;
+    $('eventBody').innerHTML =
+      '<div class="figures">' +
+      '<div class="figure"><b>' + counted + ' von ' + ev.capacity + '</b><span>Plätze verkauft</span><div class="meter"><i style="width:' + pct + '%"></i></div></div>' +
+      '<div class="figure"><b>' + inside + '</b><span>aktuell drin</span></div>' +
+      '<div class="figure"><b>' + esc(money(revenue)) + '</b><span>Umsatz</span></div>' +
+      (hasCosts ? '<div class="figure"><b>' + esc(money(actual)) + '</b><span>Kosten' + (planned && planned !== actual ? ' (geplant ' + esc(money(planned)) + ')' : '') + '</span></div>' : '') +
+      (stIds.length ? '<div class="figure"><b><a href="stationen.html" style="color:inherit">' + openReports + '</a></b><span>offene Meldungen · ' + stIds.length + ' Stationen</span></div>' : '') +
+      (cancelled ? '<div class="figure"><b>' + cancelled + '</b><span>storniert</span></div>' : '') +
+      '</div>' +
+      (types.length
+        ? '<div class="tablewrap" style="margin-top:18px"><table class="data"><thead><tr><th>Ticketart</th><th class="right">Preis</th><th class="right">Verkauft</th><th class="right">Limit</th><th class="right">Umsatz</th></tr></thead><tbody>' +
+          types.map((t) => '<tr><td>' + esc(t.name) + '</td><td class="right num">' + esc(money(t.price)) + '</td><td class="right num">' + byType[t.id] +
+            '</td><td class="right num">' + (t.type_limit == null ? '–' : t.type_limit) + '</td><td class="right num">' + esc(money(byType[t.id] * Number(t.price))) + '</td></tr>').join('') +
+          '</tbody></table></div>'
+        : '<p class="muted" style="margin-top:14px">Noch keine Ticketarten. Lege sie unter „Events“ an.</p>');
+  }
+
+  async function renderCampaigns() {
+    const c = await sb.from('campaigns').select('*').order('created_at', { ascending: false });
+    if (c.error) throw c.error;
+    if (!c.data.length) return;
+    const o = await sb.from('campaign_orders').select('campaign_id, price, paid, delivered');
+    if (o.error) throw o.error;
+    const stat = {};
+    c.data.forEach((x) => { stat[x.id] = { n: 0, paid: 0, paidSum: 0, openSum: 0, delivered: 0 }; });
+    o.data.forEach((r) => {
+      const s = stat[r.campaign_id];
+      if (!s) return;
+      s.n++;
+      if (r.paid) { s.paid++; s.paidSum += Number(r.price); } else { s.openSum += Number(r.price); }
+      if (r.delivered) s.delivered++;
+    });
+    $('campaigns').innerHTML = '<section class="section"><div class="section-head"><h2>Aktionen</h2>' +
+      '<a class="btn secondary sm" href="aktionen.html">Zu den Aktionen</a></div>' +
+      '<div class="tablewrap"><table class="data"><thead><tr><th>Aktion</th><th class="right">Bestellungen</th><th class="right">Bezahlt</th><th class="right">Noch offen</th><th class="right">Ausgeliefert</th></tr></thead><tbody>' +
+      c.data.map((x) => {
+        const s = stat[x.id];
+        return '<tr><td>' + esc(x.name) + '</td><td class="right num">' + s.n + '</td>' +
+          '<td class="right num">' + s.paid + ' (' + esc(money(s.paidSum)) + ')</td>' +
+          '<td class="right num">' + esc(money(s.openSum)) + '</td>' +
+          '<td class="right num">' + s.delivered + ' von ' + s.n + '</td></tr>';
+      }).join('') + '</tbody></table></div></section>';
+  }
+
+  // ---- T0 festlegen ----
+  $('t0Btn').addEventListener('click', () => {
+    $('t0Input').value = cur.t0 ? SV.toLocalInput(cur.t0, true) : '';
+    $('t0Dlg').showModal();
+  });
+  $('t0Cancel').addEventListener('click', () => $('t0Dlg').close());
+  $('t0Form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const v = $('t0Input').value;
+    await SV.busy($('t0Ok'), async () => {
+      const iso = v ? SV.fromLocalInput(v) : null;
+      const r = await sb.from('events').update({ t0: iso }).eq('id', cur.id);
+      if (r.error) { SV.fail(r.error); return; }
+      cur.t0 = iso;
+      $('t0Dlg').close();
+      await renderEvent();
+    });
+  });
+
+  function pick() {
+    cur = events.find((x) => x.id === $('eventSel').value) || null;
+    return cur ? renderEvent().catch(SV.fail) : Promise.resolve();
+  }
+  $('gLink').addEventListener('click', () => SV.store.set('sv.event', cur.id));
+  $('eLink').addEventListener('click', () => SV.store.set('sv.event', cur.id));
+
+  try {
+    await SV.syncClock();
+    setInterval(() => SV.syncClock().catch(() => {}), 300000);
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    if (events.length) {
+      SV.fillEventSelect($('eventSel'), events);
+      $('eventSel').addEventListener('change', pick);
+      await pick();
+      timer = setInterval(tick, 250);
+    }
+    await renderCampaigns();
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

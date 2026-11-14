@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Anzeigen – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Anzeigen</h1>
+      <p class="muted">Öffentliche Seiten ohne Login für Schulbildschirm, Beamer oder Handy. Wer den Link kennt, sieht nur Countdown und freie Plätze.</p>
+    </div>
+    <div><button class="btn" type="button" id="newScreen">Neue Anzeige</button></div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+    <div id="list"></div>
+    <div class="hint" style="margin-top:12px">Tipps: Doppelklick auf der Anzeige oder Taste F schaltet Vollbild ein. Mit der Taste T lässt sich das Testbild ein- und ausblenden. Die Anzeige aktualisiert sich alle 5 Sekunden.</div>
+  </div>
+</main>
+
+<dialog id="scDlg">
+  <form class="dlg" id="scForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="scTitleH" style="margin:0 0 12px">Anzeige</h3>
+      <div class="field"><label for="scName">Name (nur für dich)</label><input id="scName" maxlength="60" placeholder="z. B. Schulhof-Bildschirm"></div>
+      <div class="field"><label for="scMode">Darstellung</label>
+        <select id="scMode"><option value="auto">Normal (Countdown, freie Plätze, Danke)</option><option value="test">Testbild (zum Einrichten des Bildschirms)</option></select></div>
+      <div class="field"><label for="scHeading">Überschrift (leer = Eventname)</label><input id="scHeading" maxlength="80"></div>
+      <div class="field"><label for="scBefore">Text vor dem Event</label><input id="scBefore" maxlength="120" placeholder="z. B. Einlass ab 17:30 Uhr"></div>
+      <div class="field"><label for="scDuring">Überschrift während des Events</label><input id="scDuring" maxlength="60" placeholder="Heute bei uns"></div>
+      <div class="field"><label for="scAfter">Text nach dem Event</label><input id="scAfter" maxlength="80" placeholder="Danke fürs Dabeisein!"></div>
+      <div class="grid-2">
+        <div class="field"><label for="scHours">Dauer des Events (Stunden)</label><input id="scHours" type="number" min="0.5" max="48" step="0.5" value="6"><div class="hint">Danach zeigt die Anzeige den „Danke“-Text.</div></div>
+        <div class="field"><label>Anzeigen</label>
+          <label class="check"><input id="scFree" type="checkbox"> Freie Plätze</label>
+          <label class="check"><input id="scInside" type="checkbox"> Gäste im Haus</label>
+          <label class="check"><input id="scActive" type="checkbox"> Anzeige eingeschaltet</label></div>
+      </div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="scCancel">Abbrechen</button><button class="btn" type="submit" id="scOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'anzeigen', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, $ } = SV;
+  let events = [], cur = null, screens = [], editing = null;
+
+  const linkOf = (s, extra) => new URL('anzeige.html?t=' + s.token + (extra || ''), location.href).href;
+
+  async function load() {
+    const ev = cur;
+    const r = await sb.from('public_screens').select('*').eq('event_id', ev.id).order('created_at');
+    if (r.error) throw r.error;
+    if (cur !== ev) return;
+    screens = r.data;
+    render();
+  }
+
+  function render() {
+    if (!screens.length) { $('list').innerHTML = '<div class="empty"><b>Noch keine Anzeige</b>Lege eine an und öffne den Link auf dem Bildschirm.</div>'; return; }
+    $('list').innerHTML = screens.map((s) =>
+      '<div class="station-card" data-id="' + s.id + '"><div class="section-head" style="margin-bottom:6px"><div><h3 style="margin:0">' + esc(s.name) + ' ' +
+      (s.active ? '<span class="badge ok">an</span>' : '<span class="badge bad">aus</span>') + (s.mode === 'test' ? ' <span class="badge warn">Testbild</span>' : '') + '</h3>' +
+      '<div class="muted small" style="word-break:break-all">' + esc(linkOf(s)) + '</div></div>' +
+      '<div class="actions"><a class="btn secondary sm" href="' + esc(linkOf(s)) + '" target="_blank" rel="noopener">Öffnen</a>' +
+      '<a class="btn secondary sm" href="' + esc(linkOf(s, '&test=1')) + '" target="_blank" rel="noopener">Testbild</a>' +
+      '<button class="btn secondary sm" type="button" data-act="copy">Link kopieren</button>' +
+      '<button class="btn secondary sm" type="button" data-act="edit">Bearbeiten</button>' +
+      '<button class="btn secondary sm" type="button" data-act="renew">Neuer Link</button>' +
+      '<button class="btn secondary sm" type="button" data-act="del">Löschen</button></div></div></div>').join('');
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const card = b.closest('[data-id]');
+    const s = screens.find((x) => x.id === card.dataset.id);
+    try {
+      if (b.dataset.act === 'copy') { await SV.copyText(linkOf(s)); SV.toast('Link kopiert'); }
+      else if (b.dataset.act === 'edit') openScreen(s);
+      else if (b.dataset.act === 'renew') {
+        if (!await SV.confirmBox('Der bisherige Link funktioniert danach nicht mehr. Du musst den neuen Link auf dem Bildschirm eintragen.', { title: 'Neuen Link erzeugen?', ok: 'Neuer Link', danger: true })) return;
+        const t = Array.from(crypto.getRandomValues(new Uint8Array(32))).map((v) => v.toString(16).padStart(2, '0')).join('');
+        const r = await sb.from('public_screens').update({ token: t }).eq('id', s.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (b.dataset.act === 'del') {
+        if (!await SV.confirmBox('„' + s.name + '“ wird gelöscht. Der Link funktioniert dann nicht mehr.', { title: 'Anzeige löschen?', ok: 'Löschen', danger: true })) return;
+        const r = await sb.from('public_screens').delete().eq('id', s.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      }
+    } catch (err) { SV.fail(err); }
+  });
+
+  function openScreen(s) {
+    editing = s || null;
+    const c = (s && s.config) || {};
+    $('scTitleH').textContent = s ? 'Anzeige bearbeiten' : 'Neue Anzeige';
+    $('scName').value = s ? s.name : '';
+    $('scMode').value = s ? s.mode : 'auto';
+    $('scHeading').value = c.title || '';
+    $('scBefore').value = c.before_text || '';
+    $('scDuring').value = c.during_text || '';
+    $('scAfter').value = c.after_text || '';
+    $('scHours').value = c.during_s ? c.during_s / 3600 : 6;
+    $('scFree').checked = c.show_free !== false;
+    $('scInside').checked = !!c.show_inside;
+    $('scActive').checked = s ? s.active : true;
+    $('scDlg').showModal();
+  }
+  $('newScreen').addEventListener('click', () => openScreen(null));
+  $('scCancel').addEventListener('click', () => $('scDlg').close());
+  $('scForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('scName').value.trim();
+    if (!name) return SV.toast('Bitte einen Namen eingeben.', 'bad');
+    const h = parseFloat($('scHours').value);
+    if (!(h >= 0.5 && h <= 48)) return SV.toast('Die Dauer muss zwischen 0,5 und 48 Stunden liegen.', 'bad');
+    const config = { show_free: $('scFree').checked, show_inside: $('scInside').checked, during_s: Math.round(h * 3600) };
+    [['title', 'scHeading'], ['before_text', 'scBefore'], ['during_text', 'scDuring'], ['after_text', 'scAfter']].forEach((p) => { const v = $(p[1]).value.trim(); if (v) config[p[0]] = v; });
+    const row = { name: name, mode: $('scMode').value, active: $('scActive').checked, config: config };
+    await SV.busy($('scOk'), async () => {
+      const r = editing ? await sb.from('public_screens').update(row).eq('id', editing.id) : await sb.from('public_screens').insert(Object.assign({ event_id: cur.id }, row));
+      if (r.error) return SV.fail(r.error);
+      $('scDlg').close();
+      await load();
+    });
+  });
+
+  function pick() { cur = events.find((x) => x.id === $('eventSel').value) || null; return cur ? load().catch(SV.fail) : Promise.resolve(); }
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    $('newScreen').hidden = events.length === 0;
+    if (events.length) { SV.fillEventSelect($('eventSel'), events); $('eventSel').addEventListener('change', pick); await pick(); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="SVEvents">
+<title>Einlass – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Einlass</h1>
+      <p class="muted">Tickets scannen und Gäste ein- und austragen.</p>
+    </div>
+  </div>
+
+  <div id="none" class="empty" hidden>
+    <b>Kein Event freigegeben</b>
+    Dir ist noch kein Event zum Scannen zugewiesen. Wende dich an einen Admin.
+  </div>
+
+  <div id="main" hidden>
+    <div class="toolbar">
+      <div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div>
+      <div class="field"><button class="btn secondary" type="button" id="fsOn">Vollbild</button></div>
+      <div class="field"><button class="btn secondary" type="button" id="sndBtn" aria-pressed="true">Ton: an</button></div>
+    </div>
+    <div class="figures" id="figures" style="margin-bottom:22px"></div>
+
+    <div id="scanArea">
+    <div class="fs-bar">
+      <div class="fs-info"><b id="fsEvent"></b><span id="fsStat"></span></div>
+      <div class="fs-btns"><button class="btn secondary sm" type="button" id="sndBtn2" aria-pressed="true">Ton: an</button><button class="btn secondary sm" type="button" id="fsOff">Beenden</button></div>
+    </div>
+    <div class="scan-grid">
+      <div class="scan-left">
+        <div class="field">
+          <div class="seg stretch big" role="radiogroup" aria-label="Richtung">
+            <label><input type="radio" name="dir" value="in" checked><span>Eingang</span></label>
+            <label><input type="radio" name="dir" value="out"><span>Ausgang</span></label>
+          </div>
+        </div>
+        <div id="reader"></div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" type="button" id="camStart">Kamera starten</button>
+          <button class="btn secondary" type="button" id="camStop" hidden>Kamera stoppen</button>
+        </div>
+        <details style="margin-top:18px">
+          <summary class="muted" style="cursor:pointer">Code von Hand eingeben</summary>
+          <form id="manualForm" style="margin-top:10px" autocomplete="off">
+            <div class="field"><label for="manual">Ticket-Code</label><input id="manual" class="mono" spellcheck="false" autocapitalize="off"></div>
+            <button class="btn secondary" type="submit">Prüfen</button>
+          </form>
+        </details>
+      </div>
+
+      <div class="scan-right">
+        <div id="verdict" class="verdict idle" role="status" aria-live="assertive">
+          <div class="v-title">Bereit</div>
+          <div class="v-sub">Kamera starten und den QR-Code des Tickets scannen.</div>
+        </div>
+        <div id="scanNo" class="scan-no" hidden></div>
+      </div>
+    </div>
+    </div>
+
+    <section class="section" id="guestSec">
+      <div class="section-head"><h2>Gästeliste</h2><span class="muted small" id="guestCount"></span></div>
+      <div class="toolbar">
+        <div class="field grow"><label for="gSearch">Suchen</label><input id="gSearch" type="search" placeholder="Name oder Klasse" autocomplete="off"></div>
+        <div class="field"><span class="label">Anzeigen</span>
+          <div class="seg" role="radiogroup" aria-label="Filter">
+            <label><input type="radio" name="gf" value="all" checked><span>Alle</span></label>
+            <label><input type="radio" name="gf" value="outside"><span>Noch nicht da</span></label>
+            <label><input type="radio" name="gf" value="inside"><span>Drin</span></label>
+          </div>
+        </div>
+      </div>
+      <div id="guestList"></div>
+      <p class="hint">„Einlassen“ und „Als draußen“ tragen den Gast von Hand ein oder aus. Das steht dann im Protokoll.</p>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'einlass', need: 'scan' });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const { $, esc } = SV;
+
+  let events = [];
+  let scanner = null;
+  let working = false;
+  let last = { token: '', at: 0 };
+  let wake = null;
+
+  const direction = () => document.querySelector('input[name="dir"]:checked').value;
+
+  async function loadStats() {
+    const r = await sb.rpc('event_stats', { p_event_id: $('eventSel').value });
+    if (r.error || !r.data) return;
+    $('figures').innerHTML =
+      '<div class="figure"><b>' + r.data.inside + '</b><span>aktuell drin</span></div>' +
+      '<div class="figure"><b>' + r.data.sold + ' von ' + r.data.capacity + '</b><span>Plätze verkauft</span></div>';
+    $('fsStat').textContent = r.data.inside + ' drin';
+  }
+
+  // ---------- Rückmeldung: Ton, Vibration, Animation, Zähler ----------
+  let soundOn = true;
+  try { soundOn = localStorage.getItem('sv_sound') !== 'off'; } catch (e) { /* egal */ }
+  function showSound() {
+    ['sndBtn', 'sndBtn2'].forEach((id) => { $(id).textContent = 'Ton: ' + (soundOn ? 'an' : 'aus'); $(id).setAttribute('aria-pressed', String(soundOn)); });
+  }
+  let audio = null;
+  function ctxAudio() {
+    try {
+      if (!audio) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) audio = new AC(); }
+      if (audio && audio.state === 'suspended') audio.resume();
+    } catch (e) { audio = null; }
+    return audio;
+  }
+  function tone(ac, freq, start, dur, type, vol) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    const t0 = ac.currentTime + start;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(ac.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  // gültig: zwei helle, steigende Töne · schon drin / nicht drin: zwei gleiche mittlere · ungültig: tiefer Summton
+  function beep(kind) {
+    if (!soundOn) return;
+    const ac = ctxAudio();
+    if (!ac) return;
+    if (kind === 'ok') { tone(ac, 880, 0, 0.12, 'sine', 0.35); tone(ac, 1320, 0.12, 0.18, 'sine', 0.35); }
+    else if (kind === 'warn') { tone(ac, 520, 0, 0.14, 'triangle', 0.4); tone(ac, 520, 0.22, 0.14, 'triangle', 0.4); }
+    else { tone(ac, 160, 0, 0.45, 'sawtooth', 0.3); }
+  }
+  function toggleSound() {
+    soundOn = !soundOn;
+    try { localStorage.setItem('sv_sound', soundOn ? 'on' : 'off'); } catch (e) { /* egal */ }
+    showSound();
+    if (soundOn) beep('ok');
+  }
+  $('sndBtn').addEventListener('click', toggleSound);
+  $('sndBtn2').addEventListener('click', toggleSound);
+  showSound();
+
+  let scanCount = 0, lastScanAt = 0;
+  function ago() {
+    if (!lastScanAt) return '';
+    const s = Math.round((Date.now() - lastScanAt) / 1000);
+    return s < 3 ? 'gerade eben' : s < 60 ? 'vor ' + s + ' s' : 'vor ' + Math.floor(s / 60) + ' min';
+  }
+  function showScanNo() {
+    const el = $('scanNo');
+    el.hidden = !scanCount;
+    el.textContent = 'Scan Nr. ' + scanCount + ' · ' + ago();
+  }
+  setInterval(showScanNo, 1000);
+
+  function verdict(r) {
+    const kind = r.result === 'ok' ? 'ok' : (r.result === 'already_inside' || r.result === 'not_inside') ? 'warn' : 'bad';
+    const el = $('verdict');
+    el.className = 'verdict v-' + kind;
+    let html = '<div class="v-title">' + esc(r.message || r.result) + '</div>';
+    if (r.guest_name) {
+      html += '<div class="v-guest">' + esc(r.guest_name) + (r.guest_class ? ', ' + esc(r.guest_class) : '') + '</div>';
+      if (r.ticket_type) html += '<div class="v-sub">' + esc(r.ticket_type) + '</div>';
+    }
+    el.innerHTML = html;
+    // Animation bei jedem Scan neu starten, damit auch zwei Treffer hintereinander unterscheidbar sind
+    el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+    scanCount++; lastScanAt = Date.now(); showScanNo();
+    beep(kind);
+    try { if (navigator.vibrate) navigator.vibrate(kind === 'ok' ? 80 : kind === 'warn' ? [90, 60, 90] : [300]); } catch (e) { /* iPhone: keine Vibration */ }
+  }
+
+  async function onCode(text) {
+    const token = String(text || '').trim();
+    if (!token || working) return;
+    if (token === last.token && Date.now() - last.at < 2500) return;   // derselbe Code direkt nochmal
+    ctxAudio();
+    working = true;
+    const r = await sb.rpc('scan_ticket', { p_token: token, p_direction: direction(), p_event_id: $('eventSel').value });
+    working = false;
+    last = { token: token, at: Date.now() };
+    if (r.error) verdict({ result: 'error', message: SV.errText(r.error) });
+    else verdict(r.data);
+    loadStats(); loadGuests();
+  }
+
+  // ---------- Gästeliste ----------
+  let guests = [];
+  async function loadGuests() {
+    const r = await sb.rpc('guest_list', { p_event_id: $('eventSel').value });
+    if (r.error) { $('guestList').innerHTML = '<p class="muted">Die Gästeliste konnte nicht geladen werden.</p>'; return; }
+    guests = r.data || [];
+    renderGuests();
+  }
+  const STATUS = { outside: ['Noch nicht da', 'badge'], inside: ['Drin', 'badge ok'], cancelled: ['Storniert', 'badge bad'] };
+  function renderGuests() {
+    const q = $('gSearch').value.trim().toLowerCase();
+    const f = document.querySelector('input[name="gf"]:checked').value;
+    const active = guests.filter((g) => g.status !== 'cancelled');
+    const rows = active.filter((g) => (f === 'all' || g.status === f) &&
+      (!q || (g.guest_name + ' ' + (g.guest_class || '')).toLowerCase().includes(q)));
+    const inside = active.filter((g) => g.status === 'inside').length;
+    $('guestCount').textContent = inside + ' von ' + active.length + ' drin';
+    $('guestList').innerHTML = rows.length
+      ? '<div class="tablewrap"><table class="data"><thead><tr><th>Gast</th><th>Ticketart</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map((g) => {
+          const st = STATUS[g.status] || [g.status, 'badge'];
+          const inn = g.status === 'inside';
+          return '<tr><td>' + esc(g.guest_name) + (g.guest_class ? '<div class="muted small">Klasse ' + esc(g.guest_class) + '</div>' : '') + '</td><td>' + esc(g.type_name) +
+            '</td><td><span class="' + st[1] + '">' + esc(st[0]) + '</span></td><td class="cell-actions"><button class="btn secondary sm" data-gid="' + g.ticket_id + '" data-dir="' + (inn ? 'out' : 'in') + '">' + (inn ? 'Als draußen' : 'Einlassen') + '</button></td></tr>';
+        }).join('') + '</tbody></table></div>'
+      : '<p class="muted">' + (active.length ? 'Kein Gast passt zur Suche.' : 'Für dieses Event wurden noch keine Tickets verkauft.') + '</p>';
+  }
+  $('gSearch').addEventListener('input', renderGuests);
+  document.querySelectorAll('input[name="gf"]').forEach((i) => i.addEventListener('change', renderGuests));
+  $('guestList').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-gid]');
+    if (!b) return;
+    const g = guests.find((x) => x.ticket_id === b.dataset.gid);
+    const dir = b.dataset.dir;
+    if (!g || !confirm(g.guest_name + (dir === 'in' ? ' von Hand einlassen?' : ' von Hand als draußen eintragen?'))) return;
+    await SV.busy(b, async () => {
+      const r = await sb.rpc('manual_scan', { p_ticket_id: g.ticket_id, p_direction: dir, p_event_id: $('eventSel').value });
+      if (r.error) SV.toast(SV.errText(r.error), 'bad');
+      else { verdict(r.data); SV.toast(r.data.message || 'Eingetragen', r.data.result === 'ok' ? undefined : 'bad'); }
+      loadStats(); loadGuests();
+    });
+  });
+
+  async function holdScreen() {
+    try { if (navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); } catch (e) { /* nicht schlimm */ }
+  }
+
+  async function startCam() {
+    if (scanner) return;
+    scanner = new Html5Qrcode('reader');
+    try {
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } },
+        (txt) => onCode(txt),
+        () => {}
+      );
+      $('camStart').hidden = true;
+      $('camStop').hidden = false;
+      holdScreen();
+    } catch (err) {
+      scanner = null;
+      SV.toast('Die Kamera lässt sich nicht starten. Erlaube den Kamerazugriff in den Browser-Einstellungen.', 'bad');
+    }
+  }
+
+  async function stopCam() {
+    if (!scanner) return;
+    try { await scanner.stop(); scanner.clear(); } catch (e) { /* egal */ }
+    scanner = null;
+    $('camStart').hidden = false;
+    $('camStop').hidden = true;
+    if (wake) { try { await wake.release(); } catch (e) { /* egal */ } wake = null; }
+  }
+
+  // ---------- Vollbild: nur Kamera, Richtung und großes Ergebnis ----------
+  let realFs = false;
+  function selName() { const o = $('eventSel').selectedOptions[0]; return o ? o.textContent : ''; }
+  async function fsEnter() {
+    document.body.classList.add('scan-full');
+    $('fsEvent').textContent = selName();
+    realFs = false;
+    try {
+      if (document.documentElement.requestFullscreen) { await document.documentElement.requestFullscreen(); realFs = true; }
+    } catch (e) { /* z. B. iPhone: dann bleibt es beim Vollbild innerhalb der Seite */ }
+    if (!scanner) startCam();
+  }
+  async function fsLeave() {
+    document.body.classList.remove('scan-full');
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) { /* egal */ } }
+    realFs = false;
+  }
+  $('fsOn').addEventListener('click', fsEnter);
+  $('fsOff').addEventListener('click', fsLeave);
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && realFs) { realFs = false; document.body.classList.remove('scan-full'); }
+  });
+
+  $('camStart').addEventListener('click', startCam);
+  $('camStop').addEventListener('click', stopCam);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && scanner) holdScreen(); });
+  $('manualForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    last = { token: '', at: 0 };
+    onCode($('manual').value);
+    $('manual').value = '';
+  });
+
+  try {
+    events = await SV.loadEvents();
+    if (me.role !== 'admin') {   // nur Events, bei denen man wirklich scannen darf (nicht nur verkaufen)
+      const ok = await Promise.all(events.map((e) => sb.rpc('can_scan_event', { p_event: e.id })));
+      events = events.filter((e, i) => ok[i].data === true);
+    }
+    if (!events.length) { $('none').hidden = false; return; }
+    SV.fillEventSelect($('eventSel'), events);
+    $('main').hidden = false;
+    $('eventSel').addEventListener('change', () => {
+      $('fsEvent').textContent = selName();
+      $('verdict').className = 'verdict idle';
+      $('verdict').innerHTML = '<div class="v-title">Bereit</div><div class="v-sub">Event gewechselt.</div>';
+      loadStats(); loadGuests();
+    });
+    await Promise.all([loadStats(), loadGuests()]);
+    setInterval(() => { loadStats(); loadGuests(); }, 30000);
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

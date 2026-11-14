@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Meine Schicht – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div id="empty" class="empty" hidden><b>Keine Schicht eingeteilt</b>Sobald dich ein Admin einteilt, erscheint sie hier.</div>
+  <div id="part" hidden>
+   <div id="shiftPart" hidden>
+    <div class="shift-hero">
+      <div class="kicker" id="hKicker"></div>
+      <h2 id="hName"></h2>
+      <div class="muted" id="hWhen"></div>
+      <div class="countdown" id="hCount" style="margin-top:10px">–</div>
+      <div class="muted small" id="hNote"></div>
+    </div>
+    <section class="section" id="counterSec" hidden>
+      <div class="section-head"><h2>Zähler</h2></div>
+      <div class="bigcount" id="cnt">0</div>
+      <div class="countrow"><button class="btn secondary" type="button" id="minus" aria-label="Eins weniger">−1</button><button class="btn" type="button" id="plus" aria-label="Eins mehr">+1</button></div>
+    </section>
+    <section class="section" id="tagSec" hidden>
+      <div class="section-head"><h2>Marken</h2><span class="muted" id="tagInfo"></span></div>
+      <div class="tagrid" id="tagGrid"></div>
+      <div class="hint">Antippen: Marke vergeben bzw. zurücknehmen. Farbig = vergeben.</div>
+    </section>
+    <section class="section" id="nextSec" hidden>
+      <div class="section-head"><h2>Nächster Punkt im Ablauf</h2></div>
+      <div class="countdown" id="nextCount" style="font-size:34px">–</div>
+      <div class="muted" id="nextTitle"></div>
+    </section>
+    <section class="section">
+      <div class="section-head"><h2>Problem melden</h2></div>
+      <div class="field"><textarea id="repText" rows="2" maxlength="500" placeholder="Was ist los? (z. B. Marken alle, Kasse leer)"></textarea></div>
+      <button class="btn secondary" type="button" id="repBtn">Melden</button>
+    </section>
+    <section class="section shift-list" id="listSec" hidden>
+      <div class="section-head"><h2>Weitere Schichten</h2></div>
+      <div id="list"></div>
+    </section>
+   </div>
+    <section class="section" id="taskSec" hidden style="margin-top:0">
+      <div class="section-head"><h2>Meine Aufgaben</h2></div>
+      <div id="tasks"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="tagDlg">
+  <form class="dlg" id="tagForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="tagTitle" style="margin:0 0 12px">Marke</h3>
+      <div class="field" id="holderWrap"><label for="holder">Name oder Notiz (optional)</label><input id="holder" maxlength="60" placeholder="z. B. Anna, blaue Jacke"></div>
+      <p id="tagInfoTxt" class="muted" hidden></p>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="tagCancel">Abbrechen</button><button class="btn" type="submit" id="tagOk">OK</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'schicht', need: 'stations' });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, fmt, fmtTime, $ } = SV;
+  let shifts = [], cur = null, tags = {}, dlgTag = null, runItems = [], myTasks = [];
+  const t = (iso) => new Date(iso).getTime();
+
+  // Aktuelle Schicht, sonst die nächste, sonst die zuletzt beendete
+  function choose() {
+    const now = SV.serverNow();
+    return shifts.find((s) => t(s.starts_at) <= now && now < t(s.ends_at)) ||
+      shifts.find((s) => t(s.starts_at) > now) || shifts[shifts.length - 1] || null;
+  }
+
+  async function load() {
+    const r = await sb.rpc('my_shifts');
+    if (r.error) throw r.error;
+    shifts = r.data || [];
+    const tk = await sb.rpc('my_tasks');
+    if (tk.error) throw tk.error;
+    myTasks = tk.data || [];
+    $('empty').hidden = shifts.length > 0 || myTasks.length > 0;
+    $('part').hidden = shifts.length === 0 && myTasks.length === 0;
+    $('shiftPart').hidden = shifts.length === 0;
+    renderTasks();
+    if (!shifts.length) return;
+    const prev = cur && cur.station_id;
+    cur = choose();
+    const ri = await sb.from('run_items').select('offset_s, title').eq('event_id', cur.event_id).order('offset_s');
+    runItems = ri.error ? [] : ri.data;
+    await loadTags();
+    render();
+    if (prev && prev !== cur.station_id) window.scrollTo(0, 0);
+  }
+
+  async function loadTags() {
+    tags = {};
+    if (cur.kind !== 'tags') return;
+    const r = await sb.from('station_tags').select('tag_no, holder').eq('station_id', cur.station_id);
+    if (r.error) throw r.error;
+    (r.data || []).forEach((x) => { tags[x.tag_no] = x.holder || ''; });
+  }
+
+  function render() {
+    $('hKicker').textContent = cur.event_name;
+    $('hName').textContent = cur.station_name;
+    $('hWhen').textContent = fmt(cur.starts_at) + ' – ' + fmtTime(cur.ends_at);
+    $('hNote').textContent = [cur.station_note, cur.note].filter(Boolean).join(' · ');
+    $('counterSec').hidden = cur.kind !== 'counter';
+    $('tagSec').hidden = cur.kind !== 'tags';
+    if (cur.kind === 'counter') $('cnt').textContent = cur.counter;
+    if (cur.kind === 'tags') {
+      const n = cur.tag_count;
+      let h = '';
+      for (let i = 1; i <= n; i++) h += '<button type="button" data-tag="' + i + '" class="' + (i in tags ? 'taken' : '') + '" aria-label="Marke ' + i + (i in tags ? ' vergeben' : ' frei') + '">' + i + '</button>';
+      $('tagGrid').innerHTML = h;
+      $('tagInfo').textContent = Object.keys(tags).length + ' von ' + n + ' vergeben';
+    }
+    const others = shifts.filter((s) => s.shift_id !== cur.shift_id);
+    $('listSec').hidden = !others.length;
+    $('list').innerHTML = others.map((s) => '<div class="rowline"><div><b>' + esc(s.station_name) + '</b><div class="muted small">' + esc(s.event_name) + '</div></div><div class="right"><b>' + esc(fmt(s.starts_at)) + '</b><div class="muted small">bis ' + esc(fmtTime(s.ends_at)) + '</div></div></div>').join('');
+    tick();
+  }
+
+  function dur(ms) {
+    let s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const p = (n) => String(n).padStart(2, '0');
+    return (d ? d + (d === 1 ? ' Tag ' : ' Tage ') : '') + p(Math.floor(s / 3600)) + ':' + p(Math.floor((s % 3600) / 60)) + ':' + p(s % 60);
+  }
+
+  function renderTasks() {
+    $('taskSec').hidden = !myTasks.length;
+    $('taskSec').style.marginTop = shifts.length ? '' : '0';
+    $('tasks').innerHTML = myTasks.map((k) => {
+      let due = '';
+      if (k.due_offset_s != null && k.t0) {
+        const d = new Date(new Date(k.t0).getTime() + k.due_offset_s * 1000);
+        due = 'bis ' + fmt(d.toISOString());
+      }
+      return '<div class="rowline" data-tid="' + k.task_id + '"><label class="check" style="flex:1"><input type="checkbox"' + (k.done_at ? ' checked' : '') + '> <span' + (k.done_at ? ' style="text-decoration:line-through;opacity:.6"' : '') + '>' + esc(k.title) + '</span>' +
+        '<div class="muted small">' + [esc(k.event_name), due, esc(k.note || '')].filter(Boolean).join(' · ') + '</div></label></div>';
+    }).join('');
+  }
+  $('tasks').addEventListener('change', async (e) => {
+    const row = e.target.closest('[data-tid]');
+    if (!row) return;
+    const r = await sb.rpc('task_set_done', { p_task: row.dataset.tid, p_done: e.target.checked });
+    if (r.error) SV.fail(r.error);
+    await load();
+  });
+
+  function dur2(ms) {
+    let s = Math.floor(ms / 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return p(Math.floor(s / 3600)) + ':' + p(Math.floor((s % 3600) / 60)) + ':' + p(s % 60);
+  }
+
+  function tick() {
+    if (!cur) return;
+    const t0 = cur.t0 ? new Date(cur.t0).getTime() : null;
+    $('nextSec').hidden = !(t0 != null && runItems.length);
+    if (t0 != null && runItems.length) {
+      const rel = Math.floor((SV.serverNow() - t0) / 1000);
+      const next = runItems.find((i) => i.offset_s > rel);
+      $('nextCount').textContent = next ? 'in ' + dur2((next.offset_s - rel) * 1000) : 'Ablauf beendet';
+      $('nextTitle').textContent = next ? next.title : '';
+    }
+    const now = SV.serverNow(), el = $('hCount');
+    if (now < t(cur.starts_at)) { el.textContent = 'Start in ' + dur(t(cur.starts_at) - now); el.classList.remove('past'); }
+    else if (now < t(cur.ends_at)) { el.textContent = 'Noch ' + dur(t(cur.ends_at) - now); el.classList.remove('past'); }
+    else { el.textContent = 'Schicht beendet'; el.classList.add('past'); }
+  }
+
+  // ---- Zähler ----
+  async function count(d) {
+    const r = await sb.rpc('station_counter_add', { p_station: cur.station_id, p_delta: d });
+    if (r.error) return SV.fail(r.error);
+    cur.counter = r.data;
+    $('cnt').textContent = r.data;
+    if (navigator.vibrate) navigator.vibrate(15);
+  }
+  $('plus').addEventListener('click', (e) => SV.busy(e.currentTarget, () => count(1)));
+  $('minus').addEventListener('click', (e) => SV.busy(e.currentTarget, () => count(-1)));
+
+  // ---- Marken ----
+  $('tagGrid').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tag]');
+    if (!b) return;
+    dlgTag = parseInt(b.dataset.tag, 10);
+    const taken = dlgTag in tags;
+    $('tagTitle').textContent = 'Marke ' + dlgTag + (taken ? ' zurücknehmen?' : ' vergeben');
+    $('holderWrap').hidden = taken;
+    $('tagInfoTxt').hidden = !taken;
+    $('tagInfoTxt').textContent = taken && tags[dlgTag] ? 'Vergeben an: ' + tags[dlgTag] : '';
+    $('tagInfoTxt').hidden = !(taken && tags[dlgTag]);
+    $('holder').value = '';
+    $('tagOk').textContent = taken ? 'Zurücknehmen' : 'Vergeben';
+    $('tagDlg').showModal();
+  });
+  $('tagCancel').addEventListener('click', () => $('tagDlg').close());
+  $('tagForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const taken = dlgTag in tags;
+    await SV.busy($('tagOk'), async () => {
+      const r = await sb.rpc('tag_set', { p_station: cur.station_id, p_tag: dlgTag, p_taken: !taken, p_holder: taken ? null : $('holder').value });
+      if (r.error) return SV.fail(r.error);
+      $('tagDlg').close();
+      await loadTags();
+      render();
+    });
+  });
+
+  // ---- Meldung ----
+  $('repBtn').addEventListener('click', () => SV.busy($('repBtn'), async () => {
+    const m = $('repText').value.trim();
+    if (!m) return SV.toast('Bitte beschreibe kurz das Problem.', 'bad');
+    const r = await sb.rpc('report_create', { p_station: cur.station_id, p_message: m });
+    if (r.error) return SV.fail(r.error);
+    $('repText').value = '';
+    SV.toast('Gemeldet. Ein Admin sieht es sofort.');
+  }));
+
+  try {
+    await SV.syncClock();
+    await load();
+    setInterval(tick, 500);
+    // Zähler und Marken von Kollegen an derselben Station nachladen
+    setInterval(() => { if (!document.hidden && !$('tagDlg').open) load().catch(() => {}); }, 8000);
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Insights – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Insights</h1>
+      <p class="muted">Besucher, Einnahmen, Kosten und Gewinn eines Events.</p>
+    </div>
+    <div class="actions"><button class="btn danger" type="button" id="resetBtn" hidden>Insights zurücksetzen</button></div>
+  </div>
+  <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+
+  <div id="report" hidden>
+    <div class="figures" id="figs"></div>
+
+    <section class="section">
+      <div class="section-head"><h2>Besucher im Lauf des Abends</h2><span class="muted small" id="curveNote"></span></div>
+      <div id="curve" class="chart"></div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Einnahmen und Kosten</h2></div>
+      <div class="split">
+        <div>
+          <h3 class="sub">Kosten</h3>
+          <div id="costs"></div>
+          <p class="hint" style="margin-top:12px">Trage vorher den geplanten Betrag ein und hinterher, was es wirklich gekostet hat. Einer der beiden Beträge reicht.</p>
+          <form id="costForm" class="inline-form" autocomplete="off">
+            <div class="field grow"><label for="cName">Posten</label><input id="cName" required maxlength="80" placeholder="z. B. DJ"></div>
+            <div class="field"><label for="cPlanned">Geplant (€)</label><input id="cPlanned" inputmode="decimal" placeholder="0,00" style="width:100px"></div>
+            <div class="field"><label for="cAmount">Tatsächlich (€)</label><input id="cAmount" inputmode="decimal" placeholder="0,00" style="width:100px"></div>
+            <div class="field"><button class="btn" type="submit" id="cBtn">Hinzufügen</button></div>
+          </form>
+        </div>
+        <div>
+          <h3 class="sub">Ergebnis</h3>
+          <div id="result"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>Verkäufe</h2></div>
+      <div id="types"></div>
+      <h3 class="sub" style="margin-top:24px">Verkäufe pro Tag</h3>
+      <div id="sales" class="chart"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="costDlg">
+  <form class="dlg" id="costEditForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 style="margin:0 0 12px">Kostenposten bearbeiten</h3>
+      <div class="field"><label for="ceName">Posten</label><input id="ceName" required maxlength="80"></div>
+      <div class="grid-2">
+        <div class="field"><label for="cePlanned">Geplant (€)</label><input id="cePlanned" inputmode="decimal"></div>
+        <div class="field"><label for="ceAmount">Tatsächlich (€)</label><input id="ceAmount" inputmode="decimal"></div>
+      </div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="ceCancel">Abbrechen</button><button class="btn" type="submit" id="ceOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'insights', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc, money } = SV;
+  const TZ = 'Europe/Berlin';
+  const NS = 'http://www.w3.org/2000/svg';
+
+  // alle Zeilen holen (die Datenbank liefert pro Abfrage höchstens 1000)
+  async function fetchAll(make) {
+    const out = [];
+    for (let from = 0; ; from += 1000) {
+      const r = await make().range(from, from + 999);
+      if (r.error) throw r.error;
+      out.push(...r.data);
+      if (r.data.length < 1000) break;
+    }
+    return out;
+  }
+  const fmtDT = (ms) => new Date(ms).toLocaleString('de-DE', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const fmtHM = (ms) => new Date(ms).toLocaleTimeString('de-DE', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+  const dayKey = (ms) => new Date(ms).toLocaleDateString('sv-SE', { timeZone: TZ });
+  const parseMoney = (s) => { const n = Number(String(s).trim().replace(/\./g, '').replace(',', '.')); return isFinite(n) ? n : NaN; };
+
+  // ---- Besucherzahl über die Zeit aus dem Scan-Protokoll ----
+  // Jeder gültige Eingang zählt einen Gast mehr, jeder gültige Ausgang einen weniger.
+  // Pro Ticket wird der Zustand mitgeführt, damit Tickets mit Wiedereinlass nicht doppelt zählen.
+  function curvePoints(log) {
+    const inside = new Set();
+    const pts = [];
+    log.forEach((l) => {
+      if (l.result !== 'ok') return;
+      const t = new Date(l.scanned_at).getTime();
+      if (l.direction === 'in') inside.add(l.ticket_id); else inside.delete(l.ticket_id);
+      pts.push({ t, n: inside.size });
+    });
+    return pts;
+  }
+
+  function el(tag, attrs, text) {
+    const e = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach((k) => e.setAttribute(k, attrs[k]));
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  // Obergrenze der Achse: durch 4 teilbar, damit die vier Teilstriche ganze Zahlen sind
+  const niceMax = (v) => { if (v <= 20) return Math.max(4, Math.ceil(v / 4) * 4); const raw = v / 4, p = Math.pow(10, Math.floor(Math.log10(raw))); return 4 * p * [1, 2, 2.5, 5, 10].find((m) => m * p >= raw); };
+
+  function drawCurve(host, pts) {
+    host.innerHTML = '';
+    if (!pts.length) { host.innerHTML = '<p class="muted">Noch keine gültigen Einlass-Scans für dieses Event.</p>'; return null; }
+    const W = 720, H = 280, L = 44, R = 14, T = 16, B = 34;
+    const t0 = pts[0].t - 15 * 60000, t1 = pts[pts.length - 1].t + 15 * 60000;
+    const peak = pts.reduce((a, p) => (p.n > a.n ? p : a), pts[0]);
+    const ymax = niceMax(peak.n);
+    const x = (t) => L + ((t - t0) / (t1 - t0)) * (W - L - R);
+    const y = (n) => T + (1 - n / ymax) * (H - T - B);
+    const svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Anzahl der Gäste im Saal über die Zeit. Höchststand ' + peak.n + ' um ' + fmtHM(peak.t) + ' Uhr.' });
+    // waagrechte Hilfslinien
+    for (let i = 0; i <= 4; i++) {
+      const v = (ymax / 4) * i;
+      svg.appendChild(el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'ch-grid' }));
+      svg.appendChild(el('text', { x: L - 8, y: y(v) + 4, 'text-anchor': 'end', class: 'ch-tick' }, String(Math.round(v))));
+    }
+    // Zeitachse: runde Uhrzeiten
+    const span = t1 - t0, step = span > 6 * 3600000 ? 3600000 * 2 : span > 2.5 * 3600000 ? 3600000 : 1800000;
+    for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) {
+      svg.appendChild(el('text', { x: x(t), y: H - 10, 'text-anchor': 'middle', class: 'ch-tick' }, fmtHM(t)));
+    }
+    // Treppenlinie
+    let d = 'M' + x(t0) + ',' + y(0);
+    let prev = 0;
+    pts.forEach((p) => { d += ' L' + x(p.t) + ',' + y(prev) + ' L' + x(p.t) + ',' + y(p.n); prev = p.n; });
+    d += ' L' + x(t1) + ',' + y(prev);
+    svg.appendChild(el('path', { d: d + ' L' + x(t1) + ',' + y(0) + ' Z', class: 'ch-area' }));
+    svg.appendChild(el('path', { d, class: 'ch-line', fill: 'none' }));
+    // Höchststand markieren
+    svg.appendChild(el('circle', { cx: x(peak.t), cy: y(peak.n), r: 5, class: 'ch-dot' }));
+    const lx = Math.min(Math.max(x(peak.t), L + 50), W - R - 50);
+    svg.appendChild(el('text', { x: lx, y: Math.max(y(peak.n) - 10, 12), 'text-anchor': 'middle', class: 'ch-label' }, 'Höchststand ' + peak.n));
+    // Wert unter dem Finger/Mauszeiger
+    const cur = el('g', { class: 'ch-cur', visibility: 'hidden' });
+    cur.appendChild(el('line', { y1: T, y2: H - B, class: 'ch-cross' }));
+    const tip = el('text', { y: T + 12, class: 'ch-tip' });
+    cur.appendChild(tip); svg.appendChild(cur);
+    function at(ev) {
+      const r = svg.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) / r.width) * W;
+      const t = t0 + ((px - L) / (W - L - R)) * (t1 - t0);
+      if (t < t0 || t > t1) { cur.setAttribute('visibility', 'hidden'); return; }
+      let n = 0; pts.forEach((p) => { if (p.t <= t) n = p.n; });
+      cur.setAttribute('visibility', 'visible');
+      cur.querySelector('line').setAttribute('x1', px); cur.querySelector('line').setAttribute('x2', px);
+      tip.textContent = fmtHM(t) + ' Uhr: ' + n + ' im Saal';
+      tip.setAttribute('x', px > W / 2 ? px - 8 : px + 8);
+      tip.setAttribute('text-anchor', px > W / 2 ? 'end' : 'start');
+    }
+    svg.addEventListener('pointermove', at);
+    svg.addEventListener('pointerdown', at);
+    svg.addEventListener('pointerleave', () => cur.setAttribute('visibility', 'hidden'));
+    host.appendChild(svg);
+    return peak;
+  }
+
+  function drawBars(host, days) {
+    host.innerHTML = '';
+    if (!days.length) { host.innerHTML = '<p class="muted">Noch keine Verkäufe.</p>'; return; }
+    const W = 720, H = 240, L = 36, R = 10, T = 14, B = 40;
+    const max = Math.max(...days.map((d) => d.n));
+    const ymax = niceMax(max);
+    const bw = (W - L - R) / days.length;
+    const svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Verkaufte Tickets pro Tag' });
+    for (let i = 0; i <= 4; i++) {
+      const v = (ymax / 4) * i, yy = T + (1 - v / ymax) * (H - T - B);
+      svg.appendChild(el('line', { x1: L, x2: W - R, y1: yy, y2: yy, class: 'ch-grid' }));
+      svg.appendChild(el('text', { x: L - 6, y: yy + 4, 'text-anchor': 'end', class: 'ch-tick' }, String(Math.round(v))));
+    }
+    const every = Math.ceil(days.length / 9);
+    days.forEach((d, i) => {
+      const h = (d.n / ymax) * (H - T - B), bx = L + i * bw + bw * 0.15, w = bw * 0.7;
+      const r = el('rect', { x: bx, y: T + (H - T - B) - h, width: w, height: Math.max(h, 0), rx: 3, class: 'ch-bar' });
+      r.appendChild(el('title', {}, d.label + ': ' + d.n + ' Tickets'));
+      svg.appendChild(r);
+      if (days.length <= 12) svg.appendChild(el('text', { x: bx + w / 2, y: T + (H - T - B) - h - 5, 'text-anchor': 'middle', class: 'ch-tick' }, String(d.n)));
+      if (i % every === 0) svg.appendChild(el('text', { x: bx + w / 2, y: H - 14, 'text-anchor': 'middle', class: 'ch-tick' }, d.short));
+    });
+    host.appendChild(svg);
+  }
+
+  let events = [], cur = null, costs = [], data = null;
+
+  function figure(v, label, cls) { return '<div class="figure' + (cls ? ' ' + cls : '') + '"><b>' + esc(v) + '</b><span>' + esc(label) + '</span></div>'; }
+
+  // Für die Rechnung zählt der tatsächliche Betrag; fehlt er noch, der geplante.
+  const used = (c) => Number(c.amount == null ? c.planned : c.amount);
+  const fmtOpt = (v) => (v == null ? '–' : money(v));
+
+  function renderMoney() {
+    const rev = data.revenue;
+    const sum = costs.reduce((a, c) => a + used(c), 0);
+    const planned = costs.reduce((a, c) => a + Number(c.planned == null ? (c.amount == null ? 0 : c.amount) : c.planned), 0);
+    const open = costs.filter((c) => c.amount == null).length;
+    const profit = rev - sum;
+    $('costs').innerHTML = costs.length
+      ? '<div class="tablewrap"><table class="data"><thead><tr><th>Posten</th><th class="right">Geplant</th><th class="right">Tatsächlich</th><th class="right">Differenz</th><th></th></tr></thead><tbody>' + costs.map((c) => {
+          const diff = c.planned != null && c.amount != null ? Number(c.amount) - Number(c.planned) : null;
+          return '<tr><td>' + esc(c.name) + '</td><td class="right num">' + esc(fmtOpt(c.planned)) + '</td><td class="right num">' + (c.amount == null ? '<span class="muted">offen</span>' : esc(money(c.amount))) +
+            '</td><td class="right num ' + (diff == null ? '' : diff > 0 ? 'neg' : diff < 0 ? 'pos' : '') + '">' + (diff == null ? '–' : esc((diff > 0 ? '+' : '') + money(diff))) +
+            '</td><td class="cell-actions"><button class="btn secondary sm" data-edit="' + c.id + '">Bearbeiten</button><button class="btn secondary sm" data-del="' + c.id + '" aria-label="Posten ' + esc(c.name) + ' löschen">Löschen</button></td></tr>';
+        }).join('') +
+        '<tr class="total"><td>Summe</td><td class="right num">' + esc(money(planned)) + '</td><td class="right num">' + esc(money(sum)) + '</td><td></td><td></td></tr></tbody></table></div>'
+      : '<p class="muted">Noch keine Kosten eingetragen.</p>';
+    $('result').innerHTML = '<div class="tablewrap"><table class="data"><tbody>' +
+      '<tr><td>Einnahmen</td><td class="right num">' + esc(money(rev)) + '</td></tr>' +
+      '<tr><td>Kosten' + (open ? ' <span class="muted small">(' + open + ' Posten noch geplant)</span>' : '') + '</td><td class="right num">− ' + esc(money(sum)) + '</td></tr>' +
+      '<tr class="total"><td>' + (profit < 0 ? 'Verlust' : 'Gewinn') + (open ? ' <span class="muted small">(voraussichtlich)</span>' : '') + '</td><td class="right num ' + (profit < 0 ? 'neg' : 'pos') + '">' + esc(money(profit)) + '</td></tr>' +
+      (costs.length ? '<tr><td class="muted">Kosten geplant</td><td class="right num muted">' + esc(money(planned)) + '</td></tr>' +
+        '<tr><td class="muted">Abweichung zur Planung</td><td class="right num ' + (sum > planned ? 'neg' : sum < planned ? 'pos' : '') + '">' + esc((sum > planned ? '+' : '') + money(sum - planned)) + '</td></tr>' : '') +
+      '</tbody></table></div>';
+    renderFigs(sum, profit);
+  }
+
+  function renderFigs(sum, profit) {
+    const d = data;
+    $('figs').innerHTML =
+      figure(money(d.revenue), 'Einnahmen') +
+      figure(money(sum), 'Kosten') +
+      figure(money(profit), profit < 0 ? 'Verlust' : 'Gewinn', profit < 0 ? 'neg' : 'pos') +
+      figure(String(d.entered), 'Gäste waren da') +
+      figure(d.peak ? String(d.peak.n) : '–', 'Höchststand gleichzeitig') +
+      figure(d.noShows + (d.sold ? ' (' + Math.round((d.noShows / d.sold) * 100) + ' %)' : ''), 'nicht erschienen');
+  }
+
+  async function load() {
+    $('report').hidden = !cur;
+    $('resetBtn').hidden = !cur;
+    if (!cur) return;
+    const [types, tickets, log, costRows] = await Promise.all([
+      sb.from('ticket_types').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; }),
+      fetchAll(() => sb.from('tickets').select('id, status, ticket_type_id, created_at').eq('event_id', cur.id).order('created_at')),
+      fetchAll(() => sb.from('scan_log').select('ticket_id, direction, result, scanned_at, tickets!inner(event_id)').eq('tickets.event_id', cur.id).order('scanned_at')),
+      sb.from('event_costs').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; })
+    ]);
+    costs = costRows;
+    const byId = {}; types.forEach((t) => { byId[t.id] = t; });
+    const everIn = new Set(log.filter((l) => l.result === 'ok' && l.direction === 'in').map((l) => l.ticket_id));
+    const live = tickets.filter((t) => t.status !== 'cancelled' && byId[t.ticket_type_id]);
+    const pts = curvePoints(log);
+    const stat = {}; types.forEach((t) => { stat[t.id] = { n: 0, rev: 0, cancelled: 0, came: 0 }; });
+    let revenue = 0;
+    tickets.forEach((t) => {
+      const s = stat[t.ticket_type_id]; if (!s) return;
+      if (t.status === 'cancelled') { s.cancelled++; return; }
+      s.n++; s.rev += Number(byId[t.ticket_type_id].price);
+      if (everIn.has(t.id)) s.came++;
+    });
+    types.forEach((t) => { revenue += stat[t.id].rev; });
+    const entered = live.filter((t) => everIn.has(t.id)).length;
+    data = { revenue, entered, sold: live.length, noShows: live.length - entered, peak: null };
+
+    data.peak = drawCurve($('curve'), pts);
+    $('curveNote').textContent = data.peak ? 'Höchststand ' + data.peak.n + ' um ' + fmtDT(data.peak.t) + ' Uhr' : '';
+
+    $('types').innerHTML = types.length
+      ? '<div class="tablewrap"><table class="data"><thead><tr><th>Ticketart</th><th class="right">Preis</th><th class="right">Verkauft</th><th class="right">Umsatz</th><th class="right">Da gewesen</th><th class="right">Nicht erschienen</th><th class="right">Storniert</th></tr></thead><tbody>' +
+        types.map((t) => { const s = stat[t.id]; return '<tr><td>' + esc(t.name) + '</td><td class="right num">' + esc(money(t.price)) + '</td><td class="right num">' + s.n + '</td><td class="right num">' + esc(money(s.rev)) + '</td><td class="right num">' + s.came + '</td><td class="right num">' + (s.n - s.came) + '</td><td class="right num">' + s.cancelled + '</td></tr>'; }).join('') +
+        '</tbody></table></div>'
+      : '<p class="muted">Dieses Event hat noch keine Ticketarten.</p>';
+
+    const perDay = {};
+    live.forEach((t) => { const ms = new Date(t.created_at).getTime(); const k = dayKey(ms); (perDay[k] = perDay[k] || { ms, n: 0 }).n++; });
+    const days = Object.keys(perDay).sort().map((k) => {
+      const ms = perDay[k].ms;
+      return { n: perDay[k].n, label: new Date(ms).toLocaleDateString('de-DE', { timeZone: TZ, weekday: 'short', day: '2-digit', month: '2-digit' }), short: new Date(ms).toLocaleDateString('de-DE', { timeZone: TZ, day: '2-digit', month: '2-digit' }) };
+    });
+    drawBars($('sales'), days);
+    renderMoney();
+  }
+
+  $('costs').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-del]'); if (!b) return;
+    const c = costs.find((x) => x.id === b.dataset.del);
+    if (!c || !confirm('Posten „' + c.name + '“ löschen?')) return;
+    await SV.busy(b, async () => {
+      const r = await sb.from('event_costs').delete().eq('id', c.id);
+      if (r.error) { SV.fail(r.error); return; }
+      costs = costs.filter((x) => x.id !== c.id); renderMoney();
+    });
+  });
+  // Betrag aus einem Textfeld: leer = null, ungültig = NaN
+  function moneyOrNull(v) {
+    if (!String(v).trim()) return null;
+    const n = parseMoney(v);
+    return isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+  }
+  $('costForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const planned = moneyOrNull($('cPlanned').value), amount = moneyOrNull($('cAmount').value);
+    if (Number.isNaN(planned) || Number.isNaN(amount)) { SV.toast('Bitte gültige Beträge eingeben, z. B. 25,50', 'bad'); return; }
+    if (planned == null && amount == null) { SV.toast('Bitte einen geplanten oder tatsächlichen Betrag eingeben', 'bad'); return; }
+    await SV.busy($('cBtn'), async () => {
+      const r = await sb.from('event_costs').insert({ event_id: cur.id, name: $('cName').value.trim(), planned, amount }).select().single();
+      if (r.error) { SV.fail(r.error); return; }
+      costs.push(r.data); $('cName').value = ''; $('cPlanned').value = ''; $('cAmount').value = ''; renderMoney(); $('cName').focus();
+    });
+  });
+
+  // Posten bearbeiten
+  let editingCost = null;
+  $('costs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-edit]'); if (!b) return;
+    editingCost = costs.find((x) => x.id === b.dataset.edit);
+    $('ceName').value = editingCost.name;
+    $('cePlanned').value = editingCost.planned == null ? '' : String(editingCost.planned).replace('.', ',');
+    $('ceAmount').value = editingCost.amount == null ? '' : String(editingCost.amount).replace('.', ',');
+    $('costDlg').showModal();
+    $('ceAmount').focus();
+  });
+  $('ceCancel').addEventListener('click', () => $('costDlg').close());
+  $('costEditForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const planned = moneyOrNull($('cePlanned').value), amount = moneyOrNull($('ceAmount').value);
+    if (Number.isNaN(planned) || Number.isNaN(amount)) { SV.toast('Bitte gültige Beträge eingeben, z. B. 25,50', 'bad'); return; }
+    if (planned == null && amount == null) { SV.toast('Bitte einen geplanten oder tatsächlichen Betrag eingeben', 'bad'); return; }
+    const c = editingCost;
+    await SV.busy($('ceOk'), async () => {
+      const r = await sb.from('event_costs').update({ name: $('ceName').value.trim(), planned, amount }).eq('id', c.id).select().single();
+      if (r.error) { SV.fail(r.error); return; }
+      Object.assign(c, r.data);
+      $('costDlg').close(); renderMoney();
+    });
+  });
+
+  $('resetBtn').addEventListener('click', async () => {
+    const ok = await SV.confirmBox('Für „' + cur.name + '“ werden alle Kostenposten und alle Scan-Einträge (die Besucherkurve) gelöscht. Verkaufte Tickets und Einnahmen bleiben. Das lässt sich nicht rückgängig machen.', { title: 'Insights zurücksetzen?', ok: 'Zurücksetzen', danger: true });
+    if (!ok) return;
+    await SV.busy($('resetBtn'), async () => {
+      const r = await sb.rpc('reset_event_insights', { p_event_id: cur.id });
+      if (r.error) { SV.fail(r.error); return; }
+      SV.toast('Zurückgesetzt'); await load();
+    });
+  });
+
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventSel').innerHTML = events.map((ev) => '<option value="' + ev.id + '">' + esc(ev.name) + '</option>').join('');
+    const saved = SV.store.get('sv.event');
+    if (saved && events.some((x) => x.id === saved)) $('eventSel').value = saved;
+    cur = events.find((x) => x.id === $('eventSel').value) || null;
+    SV.applyAccent(cur && cur.accent);
+    $('eventSel').addEventListener('change', () => { cur = events.find((x) => x.id === $('eventSel').value); SV.store.set('sv.event', cur.id); SV.applyAccent(cur.accent); load().catch(SV.fail); });
+    await load();
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

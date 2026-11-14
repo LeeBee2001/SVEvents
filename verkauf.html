@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Ticketverkauf – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Ticketverkauf</h1>
+      <p class="muted">Gast eintragen, sobald bezahlt wurde. Danach erscheint der QR-Code.</p>
+    </div>
+  </div>
+
+  <div id="none" class="empty" hidden>
+    <b>Kein Event freigegeben</b>
+    <span id="noneText">Dir ist noch kein Event zum Verkauf zugewiesen. Wende dich an einen Admin.</span>
+  </div>
+
+  <div id="main" hidden>
+    <div class="toolbar">
+      <div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div>
+    </div>
+    <div id="stats" class="small muted" style="margin:-4px 0 18px"></div>
+
+    <div id="formPanel" class="panel" style="max-width:560px">
+      <form id="sellForm" autocomplete="off">
+        <div class="field">
+          <span class="label">Ticketart</span>
+          <div class="choices" id="choices"></div>
+          <div class="hint" id="adminHint" hidden>Als Admin kannst du auch außerhalb des Verkaufszeitraums verkaufen.</div>
+        </div>
+        <div class="field"><label for="gName">Name</label><input id="gName" required maxlength="120"></div>
+        <div class="grid-2">
+          <div class="field"><label for="gClass">Klasse</label><input id="gClass" maxlength="20"></div>
+          <div class="field"><label for="gMail">E-Mail (optional)</label><input id="gMail" type="email" maxlength="160"><div class="hint">Mit E-Mail wird das Ticket gleich zugeschickt.</div></div>
+        </div>
+        <label class="check" id="checkinWrap" hidden><input type="checkbox" id="gCheckin" checked><span>Direkt einlassen <small class="muted">(Gast ist gleich drin und muss nicht mehr gescannt werden)</small></span></label>
+        <button class="btn lg block" type="submit" id="sellBtn">Ticket erstellen</button>
+      </form>
+    </div>
+
+    <div id="result" hidden>
+      <div id="ticketBox"></div>
+      <div id="mailStatus" class="mailstatus" hidden></div>
+      <div class="actions" style="margin-top:16px">
+        <button class="btn" type="button" id="nextBtn">Nächstes Ticket</button>
+        <button class="btn secondary" type="button" id="saveQr">Ticket speichern</button>
+        <button class="btn secondary" type="button" id="mailBtn" hidden>Erneut senden</button>
+      </div>
+    </div>
+
+    <section class="section">
+      <div class="section-head"><h2 id="recentTitle">Zuletzt verkauft</h2></div>
+      <div id="recent"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="mailDlg">
+  <form class="dlg" id="mailForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="mailDlgTitle" style="margin:0 0 12px">E-Mail eintragen</h3>
+      <div class="field"><label for="mailDlgInput">E-Mail-Adresse</label><input id="mailDlgInput" type="email" required maxlength="160"></div>
+      <div class="hint">Das Ticket wird danach gleich per E-Mail geschickt.</div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="mailDlgCancel">Abbrechen</button><button class="btn" type="submit" id="mailDlgOk">Speichern und senden</button></div>
+  </form>
+</dialog>
+
+<dialog id="qrDlg">
+  <div class="dlg">
+    <div class="dlg-body" id="qrDlgBox"></div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="qrDlgClose">Schließen</button><button class="btn" type="button" id="qrDlgSave">Ticket speichern</button></div>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'verkauf', need: 'sell' });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const isAdmin = me.role === 'admin';
+  const { $, esc, money, fmt } = SV;
+
+  let events = [];
+  let types = [];
+  let recentRows = [];
+  let lastQr = null;
+  let lastName = '';
+  let lastTicket = null;
+  let lastTicketId = null;
+  let dlgTicket = null;
+
+  // Ist die Ticketart gerade verkäuflich? (Admins dürfen immer)
+  function saleState(t) {
+    const now = Date.now();
+    if (t.sale_start && now < new Date(t.sale_start).getTime()) return { ok: false, text: 'Verkauf ab ' + fmt(t.sale_start) };
+    if (t.sale_end && now > new Date(t.sale_end).getTime()) return { ok: false, text: 'Verkauf beendet' };
+    if (t.sale_end) return { ok: true, text: 'Verkauf bis ' + fmt(t.sale_end) };
+    return { ok: true, text: '' };
+  }
+
+  function currentEvent() { return events.find((e) => e.id === $('eventSel').value); }
+
+  async function loadTypes() {
+    const id = $('eventSel').value;
+    const r = await sb.from('ticket_types').select('*').eq('event_id', id).order('created_at');
+    if (r.error) throw r.error;
+    types = r.data;
+    renderChoices();
+  }
+
+  function renderChoices() {
+    let anyBlocked = false;
+    let firstOk = -1;
+    types.forEach((t, i) => { if (!saleState(t).ok) anyBlocked = true; else if (firstOk < 0) firstOk = i; });
+    if (isAdmin && firstOk < 0 && types.length) firstOk = 0;
+    $('choices').innerHTML = types.length ? types.map((t, i) => {
+      const s = saleState(t);
+      const disabled = !s.ok && !isAdmin;
+      return '<label class="choice"><input type="radio" name="type" value="' + t.id + '"' + (i === firstOk ? ' checked' : '') + (disabled ? ' disabled' : '') + '>' +
+        '<span><span><b>' + esc(t.name) + '</b>' + (t.admin_only ? '<small>nur von Admins vergeben</small>' : s.text ? '<small>' + esc(s.text) + '</small>' : '') + '</span><b class="num">' + (t.admin_only ? 'Admin' : esc(money(t.price))) + '</b></span></label>';
+    }).join('') : '<p class="muted">Für dieses Event gibt es keine Ticketart, die du verkaufen darfst.</p>';
+    $('adminHint').hidden = !(isAdmin && anyBlocked);
+    updateCheckin();
+    $('sellBtn').disabled = !types.length || firstOk < 0;
+  }
+
+  // "Direkt einlassen" nur bei Ticketarten, für die der Admin das erlaubt hat (Abendkasse)
+  function updateCheckin() {
+    const sel = document.querySelector('input[name="type"]:checked');
+    const ty = sel ? types.find((x) => x.id === sel.value) : null;
+    $('checkinWrap').hidden = !(ty && ty.checkin_on_sale);
+  }
+  $('choices').addEventListener('change', updateCheckin);
+
+  async function loadStats() {
+    const id = $('eventSel').value;
+    const r = await sb.rpc('event_stats', { p_event_id: id });
+    if (r.error || !r.data) { $('stats').textContent = ''; return; }
+    const free = Math.max(0, r.data.capacity - r.data.sold);
+    $('stats').textContent = r.data.sold + ' von ' + r.data.capacity + ' Plätzen verkauft, noch ' + free + ' frei.';
+  }
+
+  async function loadRecent() {
+    const id = $('eventSel').value;
+    let q = sb.from('tickets')
+      .select('id, token, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, ticket_types(name)')
+      .eq('event_id', id).order('created_at', { ascending: false }).limit(20);
+    if (!isAdmin) q = q.eq('sold_by', me.id);
+    const r = await q;
+    if (r.error) throw r.error;
+    recentRows = r.data;
+    $('recentTitle').textContent = isAdmin ? 'Zuletzt verkauft (alle Verkäufer)' : 'Zuletzt von dir verkauft';
+    $('recent').innerHTML = recentRows.length
+      ? '<div class="tablewrap"><table class="data"><thead><tr><th>Gast</th><th>Ticketart</th><th>Zeit</th><th></th></tr></thead><tbody>' +
+        recentRows.map((t, i) => {
+          const gone = t.status === 'cancelled';
+          const badge = gone ? ' <span class="badge bad">storniert</span>' : t.status === 'inside' ? ' <span class="badge ok">drin</span>' : '';
+          const mailBtn = gone ? '' : t.guest_email
+            ? '<button class="btn secondary sm" data-mail="' + i + '">' + (t.mail_sent_at ? 'Erneut senden' : 'E-Mail senden') + '</button>'
+            : '<button class="btn secondary sm" data-addmail="' + i + '">E-Mail eintragen</button>';
+          const cancel = gone ? '' : '<button class="btn danger sm" data-cancel="' + i + '">Stornieren</button>';
+          return '<tr><td>' + esc(t.guest_name) + badge + (t.guest_class ? '<div class="muted small">Klasse ' + esc(t.guest_class) + '</div>' : '') + (t.guest_email ? '<div class="muted small">' + esc(t.guest_email) + (t.mail_sent_at ? ' · gesendet' : '') + '</div>' : '') + '</td><td>' +
+            esc(t.ticket_types ? t.ticket_types.name : '') + '</td><td class="nowrap">' + esc(SV.fmtTime(t.created_at)) +
+            '</td><td class="cell-actions"><button class="btn secondary sm" data-qr="' + i + '">QR-Code</button>' + mailBtn + cancel + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div>'
+      : '<p class="muted">Noch nichts verkauft.</p>';
+  }
+
+  async function refresh() {
+    try { await loadTypes(); await Promise.all([loadStats(), loadRecent()]); } catch (e) { SV.fail(e); }
+  }
+
+  function showForm() {
+    $('result').hidden = true;
+    $('formPanel').hidden = false;
+    $('gName').focus();
+  }
+
+  // ---------- Verkauf ----------
+  $('sellForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sel = document.querySelector('input[name="type"]:checked');
+    if (!sel) return SV.toast('Bitte eine Ticketart wählen.', 'bad');
+    await SV.busy($('sellBtn'), async () => {
+      const r = await sb.rpc('create_ticket', {
+        p_ticket_type_id: sel.value,
+        p_name: $('gName').value,
+        p_class: $('gClass').value.trim() || null,
+        p_email: $('gMail').value.trim() || null,
+        p_checkin: !$('checkinWrap').hidden && $('gCheckin').checked
+      });
+      if (r.error) { SV.fail(r.error); refresh(); return; }
+      const t = r.data;
+      const ty = types.find((x) => x.id === t.ticket_type_id);
+      const ev = currentEvent();
+      lastName = t.guest_name;
+      lastQr = SV.showTicket($('ticketBox'), {
+        event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token
+      });
+      lastTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token };
+      lastTicketId = t.id;
+      mailTo = t.guest_email || '';
+      $('mailStatus').hidden = true;
+      $('mailBtn').hidden = true;
+      if (mailTo) { mailSend(lastTicketId, lastTicket, mailTo, true); }
+      $('formPanel').hidden = true;
+      $('result').hidden = false;
+      $('sellForm').reset();
+      $('gCheckin').checked = true;
+      SV.toast(t.status === 'inside' ? 'Ticket erstellt – Gast ist drin' : 'Ticket erstellt');
+      loadStats(); loadRecent();
+      renderChoices();
+      // Auswahl der Ticketart beibehalten: die gewählte wieder markieren
+      const again = document.querySelector('input[name="type"][value="' + t.ticket_type_id + '"]');
+      if (again && !again.disabled) again.checked = true;
+    });
+  });
+
+  // ---------- E-Mail-Versand ----------
+  let mailTo = '';
+  function setMailStatus(kind, text) {
+    const el = $('mailStatus');
+    el.hidden = !text;
+    el.className = 'mailstatus ' + (kind || '');
+    el.textContent = text || '';
+  }
+  // inResult: Status im Ergebnisbereich zeigen (direkt nach dem Verkauf); sonst nur Meldung
+  async function mailSend(id, ticket, to, inResult) {
+    if (inResult) { setMailStatus('', 'E-Mail an ' + to + ' wird gesendet …'); $('mailBtn').hidden = true; }
+    const r = await SV.sendTicketMail(sb, id, ticket);
+    if (inResult && id === lastTicketId) {
+      if (r.ok) setMailStatus('ok', 'E-Mail an ' + to + ' gesendet.');
+      else { setMailStatus('bad', 'E-Mail nicht gesendet: ' + r.error); $('mailBtn').hidden = false; }
+    } else {
+      SV.toast(r.ok ? 'E-Mail an ' + to + ' gesendet' : 'E-Mail nicht gesendet: ' + r.error, r.ok ? undefined : 'bad');
+    }
+    if (r.ok) loadRecent();
+    return r;
+  }
+  $('mailBtn').addEventListener('click', () => { if (lastTicketId && mailTo) mailSend(lastTicketId, lastTicket, mailTo, true); });
+
+  $('nextBtn').addEventListener('click', showForm);
+  $('saveQr').addEventListener('click', () => {
+    if (lastTicket) SV.saveTicketPng(lastTicket);
+  });
+
+  // ---------- Aus der Liste: E-Mail senden ----------
+  $('recent').addEventListener('click', async (e) => {
+    const m = e.target.closest('[data-mail]');
+    if (!m) return;
+    const t = recentRows[parseInt(m.dataset.mail, 10)];
+    const ev = currentEvent();
+    await SV.busy(m, () => mailSend(t.id, { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token }, t.guest_email, false));
+  });
+
+  // ---------- E-Mail nachtragen ----------
+  let addMailRow = null;
+  $('recent').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-addmail]');
+    if (!b) return;
+    addMailRow = recentRows[parseInt(b.dataset.addmail, 10)];
+    $('mailDlgTitle').textContent = 'E-Mail für ' + addMailRow.guest_name;
+    $('mailDlgInput').value = '';
+    $('mailDlg').showModal();
+    $('mailDlgInput').focus();
+  });
+  $('mailDlgCancel').addEventListener('click', () => $('mailDlg').close());
+  $('mailForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const t = addMailRow;
+    if (!t) return;
+    const mail = $('mailDlgInput').value.trim();
+    await SV.busy($('mailDlgOk'), async () => {
+      const r = await sb.rpc('set_guest_email', { p_ticket_id: t.id, p_email: mail });
+      if (r.error) { SV.fail(r.error); return; }
+      $('mailDlg').close();
+      const ev = currentEvent();
+      await mailSend(t.id, { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token }, mail, false);
+      loadRecent();
+    });
+  });
+
+  // ---------- Stornieren ----------
+  $('recent').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-cancel]');
+    if (!b) return;
+    const t = recentRows[parseInt(b.dataset.cancel, 10)];
+    if (!confirm('Ticket von „' + t.guest_name + '“ wirklich stornieren? Der QR-Code wird ungültig und der Platz wird wieder frei.')) return;
+    await SV.busy(b, async () => {
+      const r = await sb.rpc('cancel_ticket', { p_ticket_id: t.id });
+      if (r.error) { SV.fail(r.error); return; }
+      SV.toast('Ticket storniert');
+      loadStats(); loadRecent();
+    });
+  });
+
+  // ---------- QR aus der Liste ----------
+  $('recent').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-qr]');
+    if (!b) return;
+    const t = recentRows[parseInt(b.dataset.qr, 10)];
+    const ev = currentEvent();
+    dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+    SV.showTicket($('qrDlgBox'), dlgTicket);
+    $('qrDlg').showModal();
+  });
+  $('qrDlgClose').addEventListener('click', () => $('qrDlg').close());
+  $('qrDlgSave').addEventListener('click', () => { if (dlgTicket) SV.saveTicketPng(dlgTicket); });
+
+  // ---------- Start ----------
+  try {
+    events = await SV.loadEvents();
+    if (!events.length) {
+      $('none').hidden = false;
+      return;
+    }
+    SV.fillEventSelect($('eventSel'), events);
+    $('main').hidden = false;
+    $('eventSel').addEventListener('change', () => { showForm(); refresh(); });
+    await refresh();
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

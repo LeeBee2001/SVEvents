@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Benutzer – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Benutzer</h1>
+      <p class="muted">Wer darf wann was verkaufen, scannen oder verwalten.</p>
+    </div>
+    <div class="actions"><button class="btn" type="button" id="newUser">Neuer Benutzer</button></div>
+  </div>
+  <div id="table"></div>
+</main>
+
+<dialog id="userDlg">
+  <form class="dlg" id="userForm" autocomplete="off">
+    <div class="dlg-head"><h2 id="uTitle">Benutzer</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="uName">Name</label><input id="uName" required maxlength="80"></div>
+      <div class="field" id="uEmailRow"><label for="uEmail">E-Mail</label><input id="uEmail" type="email" autocomplete="off"></div>
+      <p class="muted small" id="uEmailShow" hidden style="margin:-6px 0 14px"></p>
+      <div class="field" id="uPwRow">
+        <label for="uPw">Passwort</label>
+        <div style="display:flex; gap:8px">
+          <input id="uPw" class="mono" minlength="8" autocomplete="off">
+          <button class="btn secondary" type="button" id="uPwGen">Neu erzeugen</button>
+        </div>
+        <div class="hint">Mindestens 8 Zeichen. Gib es der Person nach dem Anlegen weiter.</div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="uRole">Art des Zugangs</label>
+          <select id="uRole">
+            <option value="staff">Mitarbeiter</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="field" id="uActiveRow">
+          <span class="label">Zugang</span>
+          <label class="check" style="margin-top:9px"><input id="uActive" type="checkbox"> Aktiv</label>
+        </div>
+      </div>
+      <div id="uWindow">
+        <div class="grid-2">
+          <div class="field"><label for="uFrom">Gültig ab</label><input id="uFrom" type="datetime-local"></div>
+          <div class="field"><label for="uUntil">Gültig bis</label><input id="uUntil" type="datetime-local"></div>
+        </div>
+        <div class="hint" style="margin:-6px 0 14px">Einsatz an Stationen (Garderobe, Theke …) legst du unter „Stationen &amp; Schichten“ fest. Danach ist keine Anmeldung und keine Aktion mehr möglich. Leer gelassen gilt der Zugang unbegrenzt.</div>
+      </div>
+      <div id="uAssign"></div>
+    </div>
+    <div class="dlg-foot">
+      <div class="left">
+        <button class="btn secondary" type="button" id="uPwChange">Passwort ändern</button>
+        <button class="btn secondary" type="button" id="uDelete">Löschen</button>
+      </div>
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="credsDlg">
+  <div class="dlg">
+    <div class="dlg-head"><h2>Benutzer angelegt</h2></div>
+    <div class="dlg-body">
+      <p class="muted" style="margin-bottom:12px">Gib diese Zugangsdaten weiter. Das Passwort wird danach nicht mehr angezeigt.</p>
+      <pre id="credsText" class="mono panel" style="margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px"></pre>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" id="credsCopy">Kopieren</button>
+      <button class="btn" type="button" data-close>Fertig</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="pwDlg">
+  <form class="dlg" id="pwForm" autocomplete="off">
+    <div class="dlg-head"><h2>Passwort ändern</h2></div>
+    <div class="dlg-body">
+      <p class="muted" id="pwWho" style="margin-bottom:12px"></p>
+      <div class="field">
+        <label for="pwNew">Neues Passwort</label>
+        <div style="display:flex; gap:8px">
+          <input id="pwNew" class="mono" minlength="8" required autocomplete="off">
+          <button class="btn secondary" type="button" id="pwGen">Neu erzeugen</button>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Passwort setzen</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'benutzer', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const { $, esc, fmt, fmtDay, money } = SV;
+
+  let profiles = [], events = [], types = [], campaigns = [], evAcc = [], tyAcc = [], caAcc = [];
+  let editing = null;
+  let sel = { types: new Set(), events: new Set(), campaigns: new Set() };
+  let emailTouched = false;   // wurde die E-Mail von Hand geändert?
+
+  // Aus dem Namen wird die Standard-E-Mail: klein, Leerzeichen als Punkt, Umlaute ausgeschrieben
+  function mailFromName(name) {
+    const local = name.trim().toLowerCase()
+      .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, '.')
+      .replace(/[^a-z0-9._-]/g, '')
+      .replace(/\.{2,}/g, '.').replace(/^\./, '').replace(/\.$/, '');
+    return local ? local + '@svevents.thgsv' : '';
+  }
+
+  // ---------- Funktion "admin-users" aufrufen ----------
+  async function callAdmin(body) {
+    const r = await sb.functions.invoke('admin-users', { body: body });
+    if (r.error) {
+      let msg = r.error.message || '';
+      try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ }
+      if (/Failed to send|fetch|not found|relay/i.test(msg)) {
+        msg = 'Die Funktion „admin-users“ ist nicht erreichbar. Wurde sie in Supabase eingerichtet?';
+      }
+      throw new Error(msg);
+    }
+    if (r.data && r.data.error) throw new Error(r.data.error);
+    return r.data;
+  }
+
+  function genPassword() {
+    const a = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const b = new Uint32Array(12);
+    crypto.getRandomValues(b);
+    let s = '';
+    for (let i = 0; i < 12; i++) { s += a[b[i] % a.length]; if (i === 3 || i === 7) s += '-'; }
+    return s;
+  }
+
+  // ---------- Daten ----------
+  async function load() {
+    const res = await Promise.all([
+      sb.from('profiles').select('*').order('name'),
+      SV.loadEvents(),
+      sb.from('ticket_types').select('*').order('created_at'),
+      sb.from('campaigns').select('*').order('created_at', { ascending: false }),
+      sb.from('event_access').select('*'),
+      sb.from('type_access').select('*'),
+      sb.from('campaign_access').select('*')
+    ]);
+    [res[0], res[2], res[3], res[4], res[5], res[6]].forEach((r) => { if (r.error) throw r.error; });
+    profiles = res[0].data; events = res[1]; types = res[2].data; campaigns = res[3].data;
+    evAcc = res[4].data; tyAcc = res[5].data; caAcc = res[6].data;
+    render();
+  }
+
+  function summary(p) {
+    if (p.role === 'admin') return 'Alles';
+    const t = tyAcc.filter((a) => a.user_id === p.id).length;
+    const e = evAcc.filter((a) => a.user_id === p.id).length;
+    const c = caAcc.filter((a) => a.user_id === p.id).length;
+    const parts = [];
+    if (t) parts.push('Verkauf: ' + t + (t === 1 ? ' Ticketart' : ' Ticketarten'));
+    if (e) parts.push('Einlass: ' + e + (e === 1 ? ' Event' : ' Events'));
+    if (c) parts.push(c + (c === 1 ? ' Aktion' : ' Aktionen'));
+    return parts.length ? parts.join(', ') : 'Noch nichts zugewiesen';
+  }
+
+  function accessCell(p) {
+    const st = SV.accessState(p);
+    const b = { ok: ['Aktiv', 'ok'], inactive: ['Deaktiviert', 'bad'], expired: ['Abgelaufen', 'bad'], notyet: ['Noch nicht gültig', 'warn'] }[st];
+    const win = p.role === 'admin' ? '' : [p.valid_from ? 'ab ' + fmt(p.valid_from) : '', p.valid_until ? 'bis ' + fmt(p.valid_until) : ''].filter(Boolean).join(' ');
+    return '<span class="badge ' + b[1] + '">' + b[0] + '</span>' + (win ? '<div class="muted small">' + esc(win) + '</div>' : '');
+  }
+
+  function render() {
+    $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Name</th><th>Rolle</th><th>Zugang</th><th>Zugewiesen</th><th></th></tr></thead><tbody>' +
+      profiles.map((p) => '<tr><td><b>' + esc(p.name) + '</b>' + (p.id === me.id ? ' <span class="badge">du</span>' : '') +
+        '<div class="muted small">' + esc(p.email || '') + '</div></td><td>' + SV.ROLE_LABEL[p.role] + '</td><td>' + accessCell(p) +
+        '</td><td>' + esc(summary(p)) + '</td><td class="cell-actions"><button class="btn secondary sm" data-edit="' + p.id + '">Bearbeiten</button></td></tr>').join('') +
+      '</tbody></table></div>';
+  }
+
+  // ---------- Zuweisungen im Dialog ----------
+  function renderAssign() {
+    const role = $('uRole').value;
+    const box = $('uAssign');
+    const evLabel = (e) => esc(e.name) + (e.starts_at ? ' <span class="muted small">' + esc(fmtDay(e.starts_at)) + '</span>' : '');
+    if (role === 'admin') {
+      box.innerHTML = '<p class="muted">Admins dürfen alles sehen und ändern. Eine Auswahl ist nicht nötig.</p>';
+      return;
+    }
+    let html = '<p class="hint" style="margin-bottom:12px">Wähle aus, was die Person tun darf. Sie sieht im Menü nur diese Bereiche. Verkauf und Einlass lassen sich kombinieren (z. B. für die Abendkasse).</p>';
+    html += '<div class="label">Verkauf: Ticketarten, die verkauft werden dürfen</div>';
+    html += events.length ? events.map((e) => {
+      const ts = types.filter((t) => t.event_id === e.id && !t.admin_only);
+      return '<div class="assign"><label class="check"><input type="checkbox" data-evall="' + e.id + '"' + (ts.length ? '' : ' disabled') + '> ' + evLabel(e) + '</label>' +
+        (ts.length
+          ? '<div class="sub">' + ts.map((t) => '<label class="check"><input type="checkbox" data-type="' + t.id + '"' + (sel.types.has(t.id) ? ' checked' : '') + '> ' +
+            esc(t.name) + ' <span class="muted small">' + esc(money(t.price)) + '</span></label>').join('') + '</div>'
+          : '<div class="sub muted small">Dieses Event hat noch keine Ticketarten.</div>') + '</div>';
+    }).join('') : '<p class="muted">Noch keine Events.</p>';
+    html += '<div class="label" style="margin-top:16px">Einlass: Events, die gescannt werden dürfen</div>';
+    html += events.length ? events.map((e) => '<label class="check"><input type="checkbox" data-scan="' + e.id + '"' + (sel.events.has(e.id) ? ' checked' : '') + '> ' + evLabel(e) + '</label>').join('')
+      : '<p class="muted">Noch keine Events.</p>';
+    html += '<div class="label" style="margin-top:16px">Aktionen, bei denen mitgearbeitet werden darf</div>';
+    html += campaigns.length ? campaigns.map((c) =>
+      '<label class="check"><input type="checkbox" data-camp="' + c.id + '"' + (sel.campaigns.has(c.id) ? ' checked' : '') + '> ' + esc(c.name) + '</label>').join('')
+      : '<p class="muted">Noch keine Aktionen.</p>';
+    box.innerHTML = html;
+    events.forEach((e) => syncEventBox(e.id));
+  }
+
+  function syncEventBox(evId) {
+    const box = document.querySelector('[data-evall="' + evId + '"]');
+    if (!box) return;
+    const ts = types.filter((t) => t.event_id === evId && !t.admin_only);
+    const n = ts.filter((t) => sel.types.has(t.id)).length;
+    box.checked = ts.length > 0 && n === ts.length;
+    box.indeterminate = n > 0 && n < ts.length;
+  }
+
+  $('uAssign').addEventListener('change', (e) => {
+    const t = e.target;
+    const flip = (set, id) => { if (t.checked) set.add(id); else set.delete(id); };
+    if (t.dataset.evall) {
+      const evId = t.dataset.evall;
+      types.filter((x) => x.event_id === evId && !x.admin_only).forEach((x) => flip(sel.types, x.id));
+      SV.$$('[data-type]', $('uAssign')).forEach((c) => {
+        const ty = types.find((x) => x.id === c.dataset.type);
+        if (ty && ty.event_id === evId) c.checked = t.checked;
+      });
+      t.indeterminate = false;
+    } else if (t.dataset.type) {
+      flip(sel.types, t.dataset.type);
+      syncEventBox(types.find((x) => x.id === t.dataset.type).event_id);
+    } else if (t.dataset.scan) flip(sel.events, t.dataset.scan);
+    else if (t.dataset.camp) flip(sel.campaigns, t.dataset.camp);
+  });
+
+  function syncRole() {
+    $('uWindow').hidden = $('uRole').value === 'admin';
+    renderAssign();
+  }
+  $('uRole').addEventListener('change', syncRole);
+
+  // ---------- Dialog öffnen ----------
+  function openUser(p) {
+    editing = p;
+    const self = !!p && p.id === me.id;
+    $('uTitle').textContent = p ? 'Benutzer bearbeiten' : 'Neuer Benutzer';
+    $('uName').value = p ? p.name : '';
+    $('uEmailRow').hidden = !!p;
+    $('uEmail').required = !p;
+    $('uEmail').value = '';
+    emailTouched = false;
+    $('uEmailShow').hidden = !p;
+    $('uEmailShow').textContent = p ? 'E-Mail: ' + (p.email || 'unbekannt') : '';
+    $('uPwRow').hidden = !!p;
+    $('uPw').required = !p;
+    $('uPw').value = p ? '' : genPassword();
+    $('uRole').value = p && p.role === 'admin' ? 'admin' : 'staff';
+    $('uRole').disabled = self;
+    $('uActiveRow').hidden = !p;
+    $('uActive').checked = p ? p.active : true;
+    $('uActive').disabled = self;
+    $('uFrom').value = p ? SV.toLocalInput(p.valid_from) : '';
+    $('uUntil').value = p ? SV.toLocalInput(p.valid_until) : '';
+    $('uPwChange').hidden = !p;
+    $('uDelete').hidden = !p || self;
+    sel = p ? {
+      types: new Set(tyAcc.filter((a) => a.user_id === p.id).map((a) => a.ticket_type_id)),
+      events: new Set(evAcc.filter((a) => a.user_id === p.id).map((a) => a.event_id)),
+      campaigns: new Set(caAcc.filter((a) => a.user_id === p.id).map((a) => a.campaign_id))
+    } : { types: new Set(), events: new Set(), campaigns: new Set() };
+    syncRole();
+    $('userDlg').showModal();
+    $('uName').focus();
+  }
+
+  // Beim Tippen des Namens die E-Mail mitschreiben, bis sie von Hand geändert wird
+  $('uName').addEventListener('input', () => {
+    if (!editing && !emailTouched) $('uEmail').value = mailFromName($('uName').value);
+  });
+  $('uEmail').addEventListener('input', () => { emailTouched = true; });
+
+  $('newUser').addEventListener('click', () => openUser(null));
+  $('table').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-edit]');
+    if (b) openUser(profiles.find((p) => p.id === b.dataset.edit));
+  });
+  SV.$$('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
+  $('uPwGen').addEventListener('click', () => { $('uPw').value = genPassword(); });
+
+  // ---------- Speichern ----------
+  $('userForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const role = $('uRole').value === 'admin' ? 'admin' : 'seller';   // Mitarbeiter = Rolle seller
+    const from = role === 'admin' ? null : SV.fromLocalInput($('uFrom').value);
+    const until = role === 'admin' ? null : SV.fromLocalInput($('uUntil').value);
+    if (from && until && until <= from) return SV.toast('„Gültig bis“ muss nach „Gültig ab“ liegen.', 'bad');
+    const wasNew = !editing;
+    const name = $('uName').value.trim();
+    const email = $('uEmail').value.trim();
+    const password = $('uPw').value;
+
+    await SV.busy(e.submitter, async () => {
+      let id;
+      try {
+        if (wasNew) {
+          const res = await callAdmin({ action: 'create', email: email, password: password, name: name, role: role, valid_from: from, valid_until: until });
+          id = res.id;
+        } else {
+          id = editing.id;
+          const upd = { name: name, role: role, valid_from: from, valid_until: until };
+          if (id !== me.id) upd.active = $('uActive').checked;
+          const r = await sb.from('profiles').update(upd).eq('id', id);
+          if (r.error) throw r.error;
+          for (const tb of ['event_access', 'type_access', 'campaign_access']) {
+            const d = await sb.from(tb).delete().eq('user_id', id);
+            if (d.error) throw d.error;
+          }
+        }
+      } catch (err) { return SV.fail(err); }
+
+      try {
+        if (role === 'seller') {
+          if (sel.events.size) {
+            const r = await sb.from('event_access').insert(Array.from(sel.events).map((x) => ({ user_id: id, event_id: x })));
+            if (r.error) throw r.error;
+          }
+          if (sel.types.size) {
+            const r = await sb.from('type_access').insert(Array.from(sel.types).map((x) => ({ user_id: id, ticket_type_id: x })));
+            if (r.error) throw r.error;
+          }
+          if (sel.campaigns.size) {
+            const r = await sb.from('campaign_access').insert(Array.from(sel.campaigns).map((x) => ({ user_id: id, campaign_id: x })));
+            if (r.error) throw r.error;
+          }
+        }
+      } catch (err) {
+        SV.toast('Gespeichert, aber die Zuweisungen konnten nicht gesetzt werden: ' + SV.errText(err), 'bad');
+        await load();
+        return;
+      }
+
+      $('userDlg').close();
+      await load();
+      if (wasNew) {
+        const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+        $('credsText').textContent = 'SVEvents\nAdresse: ' + base + '\nE-Mail: ' + email + '\nPasswort: ' + password;
+        $('credsDlg').showModal();
+      } else {
+        SV.toast('Gespeichert');
+      }
+    });
+  });
+
+  $('credsCopy').addEventListener('click', () => SV.copyText($('credsText').textContent));
+
+  // ---------- Löschen und Passwort ----------
+  $('uDelete').addEventListener('click', async () => {
+    if (!editing) return;
+    const ok = await SV.confirmBox(editing.name + ' kann sich danach nicht mehr anmelden. Bereits verkaufte Tickets bleiben erhalten. Wenn du den Zugang nur vorübergehend sperren willst, nimm stattdessen den Haken bei „Aktiv“ weg.',
+      { title: 'Benutzer löschen?', ok: 'Löschen', danger: true });
+    if (!ok) return;
+    try {
+      await callAdmin({ action: 'delete', user_id: editing.id });
+      $('userDlg').close();
+      SV.toast('Benutzer gelöscht');
+      await load();
+    } catch (err) { SV.fail(err); }
+  });
+
+  $('uPwChange').addEventListener('click', () => {
+    $('pwWho').textContent = 'Für ' + editing.name + (editing.email ? ' (' + editing.email + ')' : '');
+    $('pwNew').value = genPassword();
+    $('pwDlg').showModal();
+  });
+  $('pwGen').addEventListener('click', () => { $('pwNew').value = genPassword(); });
+  $('pwForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await SV.busy(e.submitter, async () => {
+      try {
+        await callAdmin({ action: 'set_password', user_id: editing.id, password: $('pwNew').value });
+        const pw = $('pwNew').value;
+        $('pwDlg').close();
+        $('credsText').textContent = 'Neues Passwort für ' + editing.name + ': ' + pw;
+        $('credsDlg').showModal();
+      } catch (err) { SV.fail(err); }
+    });
+  });
+
+  try { await load(); } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

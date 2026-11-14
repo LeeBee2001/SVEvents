@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Stationen – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Stationen &amp; Schichten</h1>
+      <p class="muted">Wer ist wann wo eingeteilt? Helfer sehen nur ihre eigene Station.</p>
+    </div>
+    <div><button class="btn" type="button" id="newStation">Neue Station</button></div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+    <section class="section" id="reportsSec" hidden>
+      <div class="section-head"><h2>Meldungen</h2></div>
+      <div id="reports"></div>
+    </section>
+    <section class="section">
+      <div class="section-head"><h2>Jetzt</h2></div>
+      <div id="now"></div>
+    </section>
+    <section class="section">
+      <div class="section-head"><h2>Stationen</h2></div>
+      <div id="stations"></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="stDlg">
+  <form class="dlg" id="stForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="stTitle" style="margin:0 0 12px">Station</h3>
+      <div class="field"><label for="stName">Name</label><input id="stName" maxlength="60" placeholder="z. B. Garderobe"></div>
+      <div class="field"><label for="stKind">Art</label>
+        <select id="stKind">
+          <option value="plain">Nur Schichtplan</option>
+          <option value="counter">Mit Zähler (+1 / −1)</option>
+          <option value="tags">Mit Nummernmarken (Garderobe)</option>
+        </select></div>
+      <div class="field" id="stTagsWrap" hidden><label for="stTags">Anzahl Marken</label><input id="stTags" type="number" min="1" max="1000" inputmode="numeric"></div>
+      <div class="field"><label for="stNote">Hinweis für Helfer (optional)</label><textarea id="stNote" rows="2" maxlength="500" placeholder="z. B. Kasse im Schrank links"></textarea></div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="stCancel">Abbrechen</button><button class="btn" type="submit" id="stOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<dialog id="shDlg">
+  <form class="dlg" id="shForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="shTitle" style="margin:0 0 12px">Schicht hinzufügen</h3>
+      <div class="field"><label for="shUser">Mitarbeiter</label><select id="shUser"></select></div>
+      <div class="grid-2">
+        <div class="field"><label for="shFrom">Von</label><input id="shFrom" type="datetime-local"></div>
+        <div class="field"><label for="shTo">Bis</label><input id="shTo" type="datetime-local"></div>
+      </div>
+      <div class="field"><label for="shNote">Notiz (optional)</label><input id="shNote" maxlength="300" placeholder="z. B. Aufbau"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="shCancel">Abbrechen</button><button class="btn" type="submit" id="shOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'stationen', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, fmt, fmtTime, $ } = SV;
+  const KIND = { plain: 'Schichtplan', counter: 'Zähler', tags: 'Marken' };
+  let events = [], cur = null, stations = [], shifts = [], reports = [], tagCount = {}, staff = [];
+  let editSt = null, shStation = null;
+
+  const t = (iso) => new Date(iso).getTime();
+  const range = (s) => fmtTime(s.starts_at) + '–' + fmtTime(s.ends_at);
+
+  async function load() {
+    const ev = cur;
+    const st = await sb.from('stations').select('*').eq('event_id', ev.id).order('sort').order('created_at');
+    if (st.error) throw st.error;
+    const ids = st.data.map((x) => x.id);
+    let sh = { data: [] }, rp = { data: [] }, tg = { data: [] };
+    if (ids.length) {
+      [sh, rp, tg] = await Promise.all([
+        sb.rpc('station_roster', { p_event: ev.id }),
+        sb.from('station_reports').select('*').in('station_id', ids).order('created_at', { ascending: false }).limit(60),
+        sb.from('station_tags').select('station_id').in('station_id', ids)
+      ]);
+      [sh, rp, tg].forEach((r) => { if (r.error) throw r.error; });
+    }
+    if (cur !== ev) return;
+    stations = st.data; shifts = sh.data || []; reports = rp.data || [];
+    tagCount = {};
+    (tg.data || []).forEach((r) => { tagCount[r.station_id] = (tagCount[r.station_id] || 0) + 1; });
+    render();
+  }
+
+  function render() {
+    renderReports(); renderNow(); renderStations();
+  }
+
+  function renderReports() {
+    const byId = {}; stations.forEach((s) => { byId[s.id] = s; });
+    const open = reports.filter((r) => !r.resolved_at);
+    const done = reports.filter((r) => r.resolved_at).slice(0, 5);
+    $('reportsSec').hidden = !reports.length;
+    const row = (r, isOpen) => '<div class="rowline"><div><b>' + esc((byId[r.station_id] || {}).name || '?') + '</b> <span class="muted small">' + esc(fmt(r.created_at)) + '</span><div>' + esc(r.message) + '</div></div>' +
+      '<button class="btn secondary sm" type="button" data-act="resolve" data-id="' + r.id + '" data-v="' + (isOpen ? '1' : '0') + '">' + (isOpen ? 'Erledigt' : 'Wieder öffnen') + '</button></div>';
+    $('reports').innerHTML = (open.length ? open.map((r) => row(r, true)).join('') : '<p class="muted">Keine offenen Meldungen.</p>') +
+      (done.length ? '<details style="margin-top:10px"><summary class="muted small">Erledigt (' + done.length + ')</summary>' + done.map((r) => row(r, false)).join('') + '</details>' : '');
+  }
+
+  function renderNow() {
+    const now = SV.serverNow();
+    if (!stations.length) { $('now').innerHTML = '<p class="muted">Noch keine Stationen.</p>'; return; }
+    $('now').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Station</th><th>Jetzt</th><th>Als Nächstes</th></tr></thead><tbody>' +
+      stations.map((s) => {
+        const mine = shifts.filter((x) => x.station_id === s.id);
+        const on = mine.filter((x) => t(x.starts_at) <= now && now < t(x.ends_at));
+        const next = mine.filter((x) => t(x.starts_at) > now).slice(0, 1);
+        return '<tr><td>' + esc(s.name) + '</td><td>' +
+          (on.length ? on.map((x) => '<span class="badge ok">' + esc(x.user_name) + ' · bis ' + esc(fmtTime(x.ends_at)) + '</span>').join(' ') : '<span class="badge bad">niemand</span>') +
+          '</td><td>' + (next.length ? esc(next[0].user_name) + ' · ab ' + esc(fmtTime(next[0].starts_at)) : '<span class="muted">–</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  function stationStatus(s) {
+    if (s.kind === 'counter') return 'Zähler: <b>' + s.counter + '</b>';
+    if (s.kind === 'tags') return 'Marken: <b>' + (tagCount[s.id] || 0) + '</b> von ' + s.tag_count + ' vergeben';
+    return '';
+  }
+
+  function renderStations() {
+    if (!stations.length) { $('stations').innerHTML = '<div class="empty"><b>Noch keine Stationen</b>Lege z. B. Garderobe, Theke und Einlass an.</div>'; return; }
+    $('stations').innerHTML = stations.map((s) => {
+      const mine = shifts.filter((x) => x.station_id === s.id);
+      return '<div class="station-card" data-sid="' + s.id + '"><div class="section-head" style="margin-bottom:8px"><div><h3 style="margin:0">' + esc(s.name) +
+        ' <span class="badge accent">' + KIND[s.kind] + '</span></h3><div class="muted small">' + stationStatus(s) + (s.note ? ' · ' + esc(s.note) : '') + '</div></div>' +
+        '<div class="actions"><button class="btn secondary sm" type="button" data-act="addShift">Schicht +</button>' +
+        '<button class="btn secondary sm" type="button" data-act="editSt">Bearbeiten</button>' +
+        (s.kind !== 'plain' ? '<button class="btn secondary sm" type="button" data-act="resetSt">Zurücksetzen</button>' : '') +
+        '<button class="btn secondary sm" type="button" data-act="delSt">Löschen</button></div></div>' +
+        (mine.length ? '<div class="tablewrap"><table class="data"><tbody>' + mine.map((x) =>
+          '<tr><td>' + esc(x.user_name) + '</td><td>' + esc(fmt(x.starts_at)) + ' – ' + esc(fmtTime(x.ends_at)) + '</td><td class="muted">' + esc(x.note || '') + '</td>' +
+          '<td class="right"><button class="btn link" type="button" data-act="delShift" data-id="' + x.shift_id + '">Entfernen</button></td></tr>').join('') + '</tbody></table></div>'
+          : '<p class="muted small" style="margin:0">Noch keine Schichten.</p>') + '</div>';
+    }).join('');
+  }
+
+  // ---- Klicks ----
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    const card = b.closest('[data-sid]');
+    const s = card ? stations.find((x) => x.id === card.dataset.sid) : null;
+    try {
+      if (act === 'resolve') {
+        const r = await sb.rpc('report_resolve', { p_report: b.dataset.id, p_resolved: b.dataset.v === '1' });
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (act === 'editSt') openStation(s);
+      else if (act === 'addShift') openShift(s);
+      else if (act === 'delShift') {
+        const r = await sb.from('shifts').delete().eq('id', b.dataset.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (act === 'resetSt') {
+        if (!await SV.confirmBox('Zähler und alle vergebenen Marken von „' + s.name + '“ werden auf null gesetzt.', { title: 'Station zurücksetzen?', ok: 'Zurücksetzen', danger: true })) return;
+        const r = await sb.rpc('station_reset', { p_station: s.id });
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (act === 'delSt') {
+        if (!await SV.confirmBox('„' + s.name + '“ wird mit allen Schichten und Meldungen gelöscht.', { title: 'Station löschen?', ok: 'Löschen', danger: true })) return;
+        const r = await sb.from('stations').delete().eq('id', s.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      }
+    } catch (err) { SV.fail(err); }
+  });
+
+  // ---- Station anlegen / bearbeiten ----
+  function syncKind() { $('stTagsWrap').hidden = $('stKind').value !== 'tags'; }
+  $('stKind').addEventListener('change', syncKind);
+  function openStation(s) {
+    editSt = s || null;
+    $('stTitle').textContent = s ? 'Station bearbeiten' : 'Neue Station';
+    $('stName').value = s ? s.name : '';
+    $('stKind').value = s ? s.kind : 'plain';
+    $('stTags').value = s && s.tag_count ? s.tag_count : '';
+    $('stNote').value = s ? (s.note || '') : '';
+    syncKind();
+    $('stDlg').showModal();
+  }
+  $('newStation').addEventListener('click', () => openStation(null));
+  $('stCancel').addEventListener('click', () => $('stDlg').close());
+  $('stForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('stName').value.trim();
+    const kind = $('stKind').value;
+    const tags = kind === 'tags' ? parseInt($('stTags').value, 10) : 0;
+    if (!name) return SV.toast('Bitte einen Namen eingeben.', 'bad');
+    if (kind === 'tags' && !(tags >= 1 && tags <= 1000)) return SV.toast('Bitte eine Markenanzahl zwischen 1 und 1000 eingeben.', 'bad');
+    const row = { name: name, kind: kind, tag_count: tags, note: $('stNote').value.trim() || null };
+    await SV.busy($('stOk'), async () => {
+      const r = editSt
+        ? await sb.from('stations').update(row).eq('id', editSt.id)
+        : await sb.from('stations').insert(Object.assign({ event_id: cur.id, sort: stations.length }, row));
+      if (r.error) return SV.fail(r.error);
+      $('stDlg').close();
+      await load();
+    });
+  });
+
+  // ---- Schicht hinzufügen ----
+  function openShift(s) {
+    shStation = s;
+    $('shTitle').textContent = 'Schicht: ' + s.name;
+    if (!staff.length) { SV.toast('Lege zuerst unter „Benutzer“ Mitarbeiter an.', 'bad'); return; }
+    $('shUser').innerHTML = staff.map((p) => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+    const base = (cur.t0 || cur.starts_at) ? new Date(cur.t0 || cur.starts_at) : new Date();
+    const to = new Date(base.getTime() + 2 * 3600000);
+    $('shFrom').value = SV.toLocalInput(base.toISOString());
+    $('shTo').value = SV.toLocalInput(to.toISOString());
+    $('shNote').value = '';
+    $('shDlg').showModal();
+  }
+  $('shCancel').addEventListener('click', () => $('shDlg').close());
+  $('shForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const from = SV.fromLocalInput($('shFrom').value), to = SV.fromLocalInput($('shTo').value);
+    if (!from || !to || t(to) <= t(from)) return SV.toast('Das Ende muss nach dem Anfang liegen.', 'bad');
+    await SV.busy($('shOk'), async () => {
+      const r = await sb.from('shifts').insert({ station_id: shStation.id, user_id: $('shUser').value, starts_at: from, ends_at: to, note: $('shNote').value.trim() || null });
+      if (r.error) return SV.fail(r.error);
+      $('shDlg').close();
+      await load();
+    });
+  });
+
+  function pick() {
+    cur = events.find((x) => x.id === $('eventSel').value) || null;
+    return cur ? load().catch(SV.fail) : Promise.resolve();
+  }
+
+  try {
+    await SV.syncClock();
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    $('newStation').hidden = events.length === 0;
+    const p = await sb.from('profiles').select('id, name, role, active').neq('role', 'admin').eq('active', true).order('name');
+    if (p.error) throw p.error;
+    staff = p.data || [];
+    if (events.length) {
+      SV.fillEventSelect($('eventSel'), events);
+      $('eventSel').addEventListener('change', pick);
+      await pick();
+      setInterval(() => { if (cur && !document.hidden) load().catch(() => {}); }, 15000);
+    }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Scan-Protokoll – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Scan-Protokoll</h1>
+      <p class="muted">Jeder Scan am Einlass, die letzten 300.</p>
+    </div>
+    <div class="actions"><button class="btn secondary" type="button" id="reload">Neu laden</button><button class="btn danger" type="button" id="resetBtn">Protokoll leeren</button></div>
+  </div>
+  <div class="toolbar">
+    <div class="field"><label for="eventSel">Event</label><select id="eventSel"><option value="">Alle Events</option></select></div>
+    <div class="field"><label for="resultSel">Ergebnis</label>
+      <select id="resultSel">
+        <option value="">Alle</option>
+        <option value="ok">Gültig</option>
+        <option value="problem">Nur Probleme</option>
+      </select>
+    </div>
+  </div>
+  <div id="table"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'protokoll', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc, fmt } = SV;
+
+  const RESULT = {
+    ok: ['Gültig', 'ok'],
+    already_inside: ['Schon drin', 'warn'],
+    not_inside: ['Nicht drin', 'warn'],
+    cancelled: ['Storniert', 'bad'],
+    invalid: ['Ungültiger Code', 'bad'],
+    forbidden: ['Kein Zugriff', 'bad'],
+    wrong_event: ['Anderes Event', 'bad']
+  };
+  let rows = [];
+
+  async function load() {
+    const r = await sb.from('scan_log')
+      .select('id, direction, result, source, scanned_at, tickets(guest_name, event_id, events(name)), profiles(name)')
+      .order('scanned_at', { ascending: false }).limit(300);
+    if (r.error) throw r.error;
+    rows = r.data;
+    const names = {};
+    rows.forEach((l) => { if (l.tickets && l.tickets.events) names[l.tickets.event_id] = l.tickets.events.name; });
+    const keep = $('eventSel').value;
+    $('eventSel').innerHTML = '<option value="">Alle Events</option>' +
+      Object.keys(names).map((id) => '<option value="' + id + '">' + esc(names[id]) + '</option>').join('');
+    if (names[keep]) $('eventSel').value = keep;
+    render();
+  }
+
+  function render() {
+    const ev = $('eventSel').value;
+    const res = $('resultSel').value;
+    const list = rows.filter((l) => {
+      if (ev && (!l.tickets || l.tickets.event_id !== ev)) return false;
+      if (res === 'ok' && l.result !== 'ok') return false;
+      if (res === 'problem' && l.result === 'ok') return false;
+      return true;
+    });
+    if (!list.length) { $('table').innerHTML = '<div class="empty"><b>Keine Einträge</b>Sobald am Einlass gescannt wird, erscheinen die Scans hier.</div>'; return; }
+    $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Gast</th><th>Event</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gescannt von</th></tr></thead><tbody>' +
+      list.map((l) => {
+        const r = RESULT[l.result] || [l.result, ''];
+        return '<tr><td class="nowrap">' + esc(fmt(l.scanned_at)) + '</td><td>' + esc(l.tickets ? l.tickets.guest_name : '–') + '</td><td>' +
+          esc(l.tickets && l.tickets.events ? l.tickets.events.name : '–') + '</td><td>' + (l.direction === 'in' ? 'Eingang' : 'Ausgang') +
+          '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + (l.source === 'manual' ? 'Von Hand' : l.source === 'sale' ? 'Abendkasse' : 'Scan') + '</td><td>' + esc(l.profiles ? l.profiles.name : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  $('eventSel').addEventListener('change', render);
+  $('resultSel').addEventListener('change', render);
+  $('resetBtn').addEventListener('click', async () => {
+    const evId = $('eventSel').value;
+    const name = evId ? $('eventSel').selectedOptions[0].textContent : null;
+    const ok = await SV.confirmBox(
+      (name ? 'Alle Einträge zu „' + name + '“' : 'ALLE Einträge aller Events') + ' werden gelöscht, auch die Kurve in den Insights. Die Tickets und ihr Status (drin/draußen) bleiben unverändert. Das lässt sich nicht rückgängig machen.',
+      { title: 'Scan-Protokoll leeren?', ok: 'Leeren', danger: true });
+    if (!ok) return;
+    await SV.busy($('resetBtn'), async () => {
+      const r = await sb.rpc('reset_scan_log', { p_event_id: evId || null });
+      if (r.error) { SV.fail(r.error); return; }
+      SV.toast(r.data + ' Einträge gelöscht');
+      await load();
+    });
+  });
+  $('reload').addEventListener('click', async () => { try { await load(); } catch (e) { SV.fail(e); } });
+  try { await load(); } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

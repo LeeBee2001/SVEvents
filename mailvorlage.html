@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Mail-Vorlage – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Mail-Vorlage</h1>
+      <p class="muted">So sieht die E-Mail aus, die Gäste mit ihrem Ticket bekommen.</p>
+    </div>
+    <div class="actions">
+      <button class="btn secondary" type="button" id="testBtn">Test-Mail an mich</button>
+      <button class="btn" type="button" id="saveBtn">Speichern</button>
+    </div>
+  </div>
+
+  <div class="split mail-split">
+    <div>
+      <div class="field"><label for="fromName">Absendername</label><input id="fromName" maxlength="60"></div>
+      <div class="field"><label for="subject">Betreff</label><input id="subject" maxlength="150"></div>
+      <div class="field">
+        <label for="html">HTML der Mail</label>
+        <textarea id="html" rows="22" spellcheck="false" class="code"></textarea>
+        <div class="hint">Platzhalter, die beim Versand durch die echten Werte ersetzt werden (auch im Betreff):</div>
+        <div class="chips" id="chips"></div>
+        <div class="hint">Tipp: Für Mails am besten Tabellen und Inline-Styles (style="…") verwenden, nicht &lt;style&gt;. Viele Mail-Programme ignorieren sonst das Design.</div>
+      </div>
+      <button class="btn secondary" type="button" id="defBtn">Standard-Vorlage laden</button>
+    </div>
+    <div>
+      <div class="label">Vorschau mit Beispieldaten</div>
+      <iframe id="preview" class="preview" sandbox title="Vorschau der E-Mail"></iframe>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'mailvorlage', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc } = SV;
+
+  const DEFAULT = {
+    from_name: 'SV Events',
+    subject: 'Dein Ticket für {{event}}',
+    html: "<!doctype html>\n<html lang=\"de\">\n<body style=\"margin:0;padding:0;background:#f2f3f5;\">\n  <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f2f3f5;padding:24px 12px;\">\n    <tr><td align=\"center\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:520px;background:#ffffff;border-radius:14px;overflow:hidden;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#15171c;\">\n        <tr><td style=\"background:{{akzent}};background-image:linear-gradient(135deg,{{akzent}},{{akzent2}});padding:28px 28px 24px;\">\n          {{logo_html}}\n          <div style=\"font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:{{akzent_text}};opacity:.8;\">Dein Ticket<\/div>\n          <div style=\"font-size:26px;line-height:1.25;font-weight:700;color:{{akzent_text}};margin-top:6px;\">{{event}}<\/div>\n        <\/td><\/tr>\n        <tr><td style=\"padding:28px;\">\n          <p style=\"margin:0 0 18px;font-size:16px;line-height:1.5;\">Hallo {{name}},<\/p>\n          <p style=\"margin:0 0 22px;font-size:16px;line-height:1.5;\">schön, dass du dabei bist! Dein Ticket hängt als Bild an dieser Mail.<\/p>\n          <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f6f7f9;border-radius:10px;\">\n            <tr><td style=\"padding:16px 18px;font-size:15px;line-height:1.7;\">\n              <b>Wann:<\/b> {{datum}}<br>\n              <b>Wo:<\/b> {{ort}}<br>\n              <b>Ticket:<\/b> {{ticketart}}\n            <\/td><\/tr>\n          <\/table>\n          <p style=\"margin:22px 0 0;font-size:15px;line-height:1.6;\">Zeige den QR-Code am Einlass vor, auf dem Handy oder ausgedruckt. Jeder Code gilt nur für eine Person, bitte gib ihn nicht weiter.<\/p>\n          <p style=\"margin:24px 0 0;font-size:16px;line-height:1.5;\">Viele Grüße<br>Deine SV<\/p>\n        <\/td><\/tr>\n        <tr><td style=\"padding:16px 28px 22px;border-top:1px solid #e6e8ec;font-size:12px;line-height:1.5;color:#6b7280;\">\n          Diese Nachricht wurde automatisch verschickt. Auf diese Adresse kannst du nicht antworten.\n        <\/td><\/tr>\n      <\/table>\n    <\/td><\/tr>\n  <\/table>\n<\/body>\n<\/html>"
+  };
+  const SAMPLE = { name: 'Max Mustermann', klasse: '8a', ticketart: 'Vorverkauf', event: 'Winterball', akzent: '#2140c3', akzent_text: '#ffffff', akzent2: '#14286f', akzent2_text: '#ffffff', logo_html: '<img src="data:image/svg+xml;utf8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2780%27 height=%2740%27%3E%3Crect width=%2780%27 height=%2740%27 rx=%278%27 fill=%27%23ffffff%27 opacity=%27.9%27/%3E%3Ctext x=%2740%27 y=%2726%27 font-family=%27Arial%27 font-size=%2716%27 text-anchor=%27middle%27 fill=%27%2314286f%27%3ELOGO%3C/text%3E%3C/svg%3E" alt="" height="40" style="display:block;height:40px;width:auto;border:0;margin:0 0 14px;">', datum: 'Freitag, 19.11.2027, 18:00 Uhr', ort: 'Aula' };
+  const CHIPS = [['name', 'Name des Gasts'], ['klasse', 'Klasse'], ['ticketart', 'Ticketart'], ['event', 'Eventname'], ['datum', 'Datum und Uhrzeit'], ['ort', 'Ort'], ['akzent', 'Hauptfarbe des Events'], ['akzent_text', 'Schriftfarbe auf der Hauptfarbe'], ['akzent2', 'Zweite Eventfarbe'], ['akzent2_text', 'Schriftfarbe auf der zweiten Farbe'], ['logo_html', 'Event-Logo (Bild, falls eingetragen)']];
+
+  const fill = (t, escape) => t.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => k === 'logo_html' ? (escape ? SAMPLE[k] : '') : escape ? esc(SAMPLE[k] || '') : (SAMPLE[k] || ''));
+  let saved = null;
+
+  function preview() {
+    $('preview').srcdoc = fill($('html').value, true);
+    $('saveBtn').textContent = saved && same() ? 'Gespeichert' : 'Speichern';
+  }
+  function same() { return saved && saved.from_name === $('fromName').value && saved.subject === $('subject').value && saved.html === $('html').value; }
+  let timer = null;
+  ['fromName', 'subject', 'html'].forEach((id) => $(id).addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); $('saveBtn').textContent = 'Speichern'; }));
+
+  $('chips').innerHTML = CHIPS.map((c) => '<button type="button" class="chip" data-ph="' + c[0] + '" title="' + esc(c[1]) + '">{{' + c[0] + '}}</button>').join('');
+  $('chips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ph]'); if (!b) return;
+    const ta = $('html'), tx = '{{' + b.dataset.ph + '}}';
+    const s = ta.selectionStart, en = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + tx + ta.value.slice(en);
+    ta.focus(); ta.selectionStart = ta.selectionEnd = s + tx.length;
+    ta.dispatchEvent(new Event('input'));
+  });
+
+  function setForm(t) { $('fromName').value = t.from_name; $('subject').value = t.subject; $('html').value = t.html; preview(); }
+
+  async function save() {
+    const row = { key: 'ticket', from_name: $('fromName').value.trim(), subject: $('subject').value.trim(), html: $('html').value, updated_at: new Date().toISOString() };
+    if (!row.from_name || !row.subject || !row.html.trim()) { SV.toast('Absendername, Betreff und HTML dürfen nicht leer sein', 'bad'); return false; }
+    if (row.html.length > 200000) { SV.toast('Das HTML ist zu lang', 'bad'); return false; }
+    const r = await sb.from('mail_templates').upsert(row);
+    if (r.error) { SV.fail(r.error); return false; }
+    saved = { from_name: row.from_name, subject: row.subject, html: row.html };
+    preview();
+    return true;
+  }
+
+  $('saveBtn').addEventListener('click', () => SV.busy($('saveBtn'), async () => { if (await save()) SV.toast('Vorlage gespeichert'); }));
+
+  $('defBtn').addEventListener('click', async () => {
+    const ok = await SV.confirmBox('Deine Änderungen im Editor werden durch die Standard-Vorlage ersetzt. Gespeichert wird erst, wenn du auf „Speichern“ klickst.', { title: 'Standard-Vorlage laden?', ok: 'Laden' });
+    if (ok) setForm(DEFAULT);
+  });
+
+  $('testBtn').addEventListener('click', () => SV.busy($('testBtn'), async () => {
+    if (!same() && !(await save())) return;
+    let png;
+    try { png = SV.ticketPng({ event: SAMPLE.event, name: SAMPLE.name, klass: SAMPLE.klasse, type: SAMPLE.ticketart, token: 'BEISPIEL' }).toDataURL('image/png').split(',')[1]; } catch (e) { png = ''; }
+    const r = await sb.functions.invoke('send-ticket', { body: { test: true, png: png } });
+    let msg = r.error ? (r.error.message || '') : (r.data && r.data.error) || '';
+    if (r.error) { try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ } }
+    if (msg) { SV.toast(msg, 'bad'); return; }
+    SV.toast('Test-Mail an ' + r.data.to + ' gesendet');
+  }));
+
+  try {
+    const r = await sb.from('mail_templates').select('from_name, subject, html').eq('key', 'ticket').maybeSingle();
+    if (r.error) throw r.error;
+    if (r.data) { saved = r.data; setForm(r.data); }
+    else { setForm(DEFAULT); SV.toast('Noch keine Vorlage gespeichert, es wird die Standard-Vorlage angezeigt'); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>
