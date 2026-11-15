@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Kontrolle – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Kontrolle</h1>
+      <p class="muted">Ticket scannen und alles dazu ansehen: Status, Verkauf und komplette Scan-Historie. Es wird nichts ein- oder ausgetragen.</p>
+    </div>
+  </div>
+  <div class="scan-grid" style="grid-template-columns:minmax(0,1fr)">
+    <div class="scan-left" style="max-width:560px">
+      <div id="reader"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn" type="button" id="camStart">Kamera starten</button>
+        <button class="btn secondary" type="button" id="camStop" hidden>Kamera stoppen</button>
+      </div>
+      <details style="margin-top:14px">
+        <summary class="muted" style="cursor:pointer">Code von Hand eingeben</summary>
+        <form id="manualForm" style="margin-top:10px" autocomplete="off">
+          <div class="field"><label for="manualCode">Ticket-Code</label><input id="manualCode" maxlength="100" autocapitalize="off"></div>
+          <button class="btn secondary" type="submit">Anzeigen</button>
+        </form>
+      </details>
+    </div>
+    <div id="out" style="margin-top:22px"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'kontrolle', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, fmt, money, $ } = SV;
+  let scanner = null, working = false, last = { token: '', at: 0 };
+
+  const STATUS = { outside: ['Draußen / noch nicht da', 'warn'], inside: ['Drin', 'ok'], cancelled: ['Storniert', 'bad'] };
+  const RESULT = { ok: ['Gültig', 'ok'], already_inside: ['Schon drin', 'warn'], not_inside: ['Nicht drin', 'warn'], cancelled: ['Storniert', 'bad'], invalid: ['Ungültig', 'bad'], forbidden: ['Kein Zugriff', 'bad'], wrong_event: ['Anderes Event', 'bad'] };
+  const SRC = { scan: 'Scan', manual: 'Von Hand', sale: 'Abendkasse' };
+
+  function show(d) {
+    if (!d.found) { $('out').innerHTML = '<div class="verdict v-bad"><div class="v-title">Kein Ticket mit diesem Code</div></div>'; return; }
+    const st = STATUS[d.status] || [d.status, ''];
+    const kind = st[1];
+    const price = d.price_paid != null ? money(d.price_paid) : money(d.type_price);
+    const hist = d.history || [];
+    $('out').innerHTML =
+      '<div class="verdict v-' + kind + '"><div class="v-title">' + esc(st[0]) + '</div>' +
+      '<div class="v-guest">' + esc(d.guest_name) + (d.guest_class ? ', ' + esc(d.guest_class) : '') + '</div>' +
+      '<div class="v-sub">' + esc(d.type_name) + ' · ' + esc(d.event_name) + '</div></div>' +
+      '<div class="tablewrap" style="margin-top:14px"><table class="data"><tbody>' +
+      '<tr><td class="muted">Bezahlt</td><td>' + esc(price) + (d.discount_code ? ' <span class="badge accent">Code ' + esc(d.discount_code) + ' (−' + esc(money(d.discount_amount)) + ')</span>' : '') + '</td></tr>' +
+      '<tr><td class="muted">Verkauft</td><td>' + esc(fmt(d.created_at)) + (d.sold_by ? ' von ' + esc(d.sold_by) : '') + '</td></tr>' +
+      '<tr><td class="muted">E-Mail</td><td>' + (d.guest_email ? esc(d.guest_email) + (d.mail_sent_at ? ' · gesendet ' + esc(fmt(d.mail_sent_at)) : ' · noch nicht gesendet') : '<span class="muted">keine</span>') + '</td></tr>' +
+      '</tbody></table></div>' +
+      '<section class="section"><div class="section-head"><h2>Scan-Historie</h2></div>' +
+      (hist.length ? '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gerät</th><th>Von</th></tr></thead><tbody>' +
+        hist.map((h) => { const r = RESULT[h.result] || [h.result, '']; return '<tr><td class="nowrap">' + esc(fmt(h.at)) + '</td><td>' + (h.direction === 'in' ? 'Eingang' : 'Ausgang') + '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + esc(SRC[h.source] || h.source) + '</td><td>' + esc(h.device || '–') + '</td><td>' + esc(h.by || '') + '</td></tr>'; }).join('') +
+        '</tbody></table></div>' : '<p class="muted">Noch nie gescannt.</p>') + '</section>';
+    try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) { /* egal */ }
+  }
+
+  async function lookup(text) {
+    const token = String(text || '').trim();
+    if (!token || working) return;
+    if (token === last.token && Date.now() - last.at < 2500) return;
+    working = true;
+    const r = await sb.rpc('ticket_inspect', { p_token: token });
+    working = false;
+    last = { token: token, at: Date.now() };
+    if (r.error) return SV.fail(r.error);
+    show(r.data);
+  }
+
+  async function startCam() {
+    if (scanner) return;
+    scanner = new Html5Qrcode('reader');
+    try {
+      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } }, (t) => lookup(t), () => {});
+      $('camStart').hidden = true; $('camStop').hidden = false;
+    } catch (err) { scanner = null; SV.toast('Die Kamera lässt sich nicht starten. Erlaube den Kamerazugriff in den Browser-Einstellungen.', 'bad'); }
+  }
+  async function stopCam() {
+    if (!scanner) return;
+    try { await scanner.stop(); scanner.clear(); } catch (e) { /* egal */ }
+    scanner = null; $('camStart').hidden = false; $('camStop').hidden = true;
+  }
+  $('camStart').addEventListener('click', startCam);
+  $('camStop').addEventListener('click', stopCam);
+  $('manualForm').addEventListener('submit', (e) => { e.preventDefault(); lookup($('manualCode').value); });
+})();
+</script>
+</body>
+</html>

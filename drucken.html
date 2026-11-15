@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Drucken und PDF – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head noprint">
+    <div>
+      <h1>Drucken und PDF</h1>
+      <p class="muted">Listen und Tickets zum Ausdrucken oder als PDF speichern. Im Druckdialog „Als PDF speichern“ wählen.</p>
+    </div>
+    <div class="actions"><button class="btn" type="button" id="printBtn">Drucken / Als PDF speichern</button></div>
+  </div>
+  <div id="empty" class="empty noprint" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+
+  <div id="eventPart" hidden>
+    <div class="toolbar">
+      <div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div>
+      <div class="field"><label for="what">Was?</label>
+        <select id="what">
+          <option value="guests">Gästeliste</option>
+          <option value="plan">Schichtplan und Ablauf</option>
+          <option value="tickets">Tickets (mehrere pro Seite)</option>
+        </select>
+      </div>
+    </div>
+    <div class="toolbar" id="optGuests">
+      <div class="field"><label for="gSort">Sortierung</label><select id="gSort"><option value="name">Nach Name</option><option value="klass">Nach Klasse, dann Name</option></select></div>
+      <div class="field"><label for="gType">Ticketart</label><select id="gType"></select></div>
+      <label class="check" style="align-self:end"><input id="gCancel" type="checkbox"> Stornierte mit auflisten</label>
+    </div>
+    <div class="toolbar" id="optTickets" hidden>
+      <div class="field"><label for="tType">Ticketart</label><select id="tType"></select></div>
+      <div class="field"><label for="tSort">Sortierung</label><select id="tSort"><option value="name">Nach Name</option><option value="klass">Nach Klasse, dann Name</option></select></div>
+      <div class="hint" style="align-self:end">Drei Tickets pro A4-Seite. Das Erstellen dauert bei vielen Tickets einen Moment.</div>
+    </div>
+
+    <div id="sheet" class="pr-sheet"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'drucken', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc, fmtDay, fmtTime } = SV;
+
+  let events = [], cur = null, types = [], gen = 0;
+  const p2 = (n) => String(n).padStart(2, '0');
+  const hms = (s) => { s = Math.abs(s); return p2(Math.floor(s / 3600)) + ':' + p2(Math.floor((s % 3600) / 60)) + ':' + p2(s % 60); };
+  const offLabel = (s) => 'T ' + (s < 0 ? '−' : '+') + ' ' + hms(s);
+  const cmp = (a, b) => String(a || '').localeCompare(String(b || ''), 'de', { numeric: true, sensitivity: 'base' });
+  const STATUS = { inside: 'drin', outside: '', cancelled: 'storniert' };
+
+  function head(title, extra) {
+    const now = new Date();
+    return '<div class="pr-head"><div><div class="pr-ev">' + esc(cur.name) + '</div><h2>' + esc(title) + '</h2></div>' +
+      '<div class="pr-meta">' + (cur.starts_at ? esc(fmtDay(cur.starts_at)) + (cur.location ? ' · ' + esc(cur.location) : '') + '<br>' : '') +
+      'Stand: ' + esc(fmtDay(now) + ', ' + fmtTime(now)) + ' Uhr' + (extra ? '<br>' + extra : '') + '</div></div>';
+  }
+
+  async function fetchTickets() {
+    let out = [], from = 0;
+    for (;;) {
+      const r = await sb.from('tickets').select('id, token, guest_name, guest_class, status, ticket_type_id').eq('event_id', cur.id).order('created_at').range(from, from + 999);
+      if (r.error) throw r.error;
+      out = out.concat(r.data);
+      if (r.data.length < 1000) return out;
+      from += 1000;
+    }
+  }
+  const typeName = (id) => (types.find((t) => t.id === id) || {}).name || '';
+  const sortBy = (list, how) => list.slice().sort((a, b) => how === 'klass' ? (cmp(a.guest_class, b.guest_class) || cmp(a.guest_name, b.guest_name)) : cmp(a.guest_name, b.guest_name));
+
+  async function guests() {
+    let list = await fetchTickets();
+    if (!$('gCancel').checked) list = list.filter((t) => t.status !== 'cancelled');
+    if ($('gType').value) list = list.filter((t) => t.ticket_type_id === $('gType').value);
+    list = sortBy(list, $('gSort').value);
+    $('sheet').innerHTML = head('Gästeliste', list.length + ' Gäste') +
+      '<table class="pr-table"><thead><tr><th style="width:28px"></th><th>Name</th><th>Klasse</th><th>Ticketart</th><th>Hinweis</th></tr></thead><tbody>' +
+      (list.map((t) => '<tr><td><span class="pr-box"></span></td><td>' + esc(t.guest_name) + '</td><td>' + esc(t.guest_class || '') + '</td><td>' + esc(typeName(t.ticket_type_id)) + '</td><td>' + esc(STATUS[t.status] || '') + '</td></tr>').join('') ||
+        '<tr><td colspan="5" class="muted">Keine Gäste.</td></tr>') + '</tbody></table>';
+  }
+
+  async function plan() {
+    const t0 = new Date(cur.t0 || cur.starts_at || Date.now());
+    const [ri, st, ro] = await Promise.all([
+      sb.from('run_items').select('offset_s, title, note, station_id').eq('event_id', cur.id).order('offset_s'),
+      sb.from('stations').select('id, name, note').eq('event_id', cur.id).order('sort').order('created_at'),
+      sb.rpc('station_roster', { p_event: cur.id })
+    ]);
+    [ri, st, ro].forEach((r) => { if (r.error) throw r.error; });
+    const stName = (id) => (st.data.find((s) => s.id === id) || {}).name || '';
+    const clock = (off) => { const d = new Date(t0.getTime() + off * 1000); return fmtTime(d); };
+    let h = head('Schichtplan und Ablauf', 'T0: ' + esc(fmtDay(t0) + ', ' + fmtTime(t0)) + ' Uhr');
+    h += '<h3 class="pr-sub">Ablauf</h3>';
+    h += ri.data.length ? '<table class="pr-table"><thead><tr><th style="width:110px">Zeit</th><th style="width:70px">Uhr</th><th>Punkt</th><th>Station</th></tr></thead><tbody>' +
+      ri.data.map((i) => '<tr><td class="mono">' + offLabel(i.offset_s) + '</td><td>' + esc(clock(i.offset_s)) + '</td><td><b>' + esc(i.title) + '</b>' + (i.note ? '<div class="small">' + esc(i.note) + '</div>' : '') + '</td><td>' + esc(stName(i.station_id)) + '</td></tr>').join('') + '</tbody></table>'
+      : '<p class="muted">Noch kein Ablauf angelegt.</p>';
+    h += '<h3 class="pr-sub">Schichten nach Station</h3>';
+    h += st.data.length ? st.data.map((s) => {
+      const sh = ro.data.filter((x) => x.station_id === s.id).sort((a, b) => cmp(a.starts_at, b.starts_at));
+      return '<div class="pr-station"><h4>' + esc(s.name) + '</h4>' + (s.note ? '<div class="small">' + esc(s.note) + '</div>' : '') +
+        (sh.length ? '<table class="pr-table"><tbody>' + sh.map((x) => '<tr><td style="width:150px">' + esc(fmtDay(x.starts_at) + ' ' + fmtTime(x.starts_at)) + ' – ' + esc(fmtTime(x.ends_at)) + '</td><td><b>' + esc(x.user_name) + '</b>' + (x.note ? ' <span class="small">· ' + esc(x.note) + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>'
+          : '<p class="muted small">Noch niemand eingeteilt.</p>') + '</div>';
+    }).join('') : '<p class="muted">Noch keine Stationen angelegt.</p>';
+    $('sheet').innerHTML = h;
+  }
+
+  async function tickets() {
+    const my = ++gen;
+    let list = (await fetchTickets()).filter((t) => t.status !== 'cancelled');
+    if ($('tType').value) list = list.filter((t) => t.ticket_type_id === $('tType').value);
+    list = sortBy(list, $('tSort').value);
+    $('sheet').innerHTML = '<p class="muted noprint" id="tProg">Tickets werden erstellt …</p><div class="pr-tickets" id="tGrid"></div>';
+    let theme = null;
+    try { const im = cur.logo_url ? await SV.loadLogo(cur.logo_url) : null; theme = SV.themeOf(cur, im); } catch (e) { theme = SV.themeOf(cur, null); }
+    const grid = $('tGrid');
+    for (let i = 0; i < list.length; i++) {
+      if (my !== gen) return;
+      const t = list[i];
+      let url = '';
+      try { url = SV.ticketPng({ event: cur.name, name: t.guest_name, klass: t.guest_class, type: typeName(t.ticket_type_id), token: t.token, theme: theme }).toDataURL('image/png'); } catch (e) { continue; }
+      const im = document.createElement('img');
+      im.src = url; im.alt = 'Ticket ' + t.guest_name; im.className = 'pr-ticket';
+      grid.appendChild(im);
+      if (i % 6 === 5) { $('tProg').textContent = (i + 1) + ' von ' + list.length + ' erstellt …'; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    if (my === gen) $('tProg').textContent = list.length + ' Tickets bereit. Im Druckdialog sind drei Tickets pro Seite eingestellt.';
+  }
+
+  let busyRender = false;
+  async function render() {
+    if (!cur) return;
+    const w = $('what').value;
+    $('optGuests').hidden = w !== 'guests';
+    $('optTickets').hidden = w !== 'tickets';
+    $('sheet').innerHTML = '<p class="muted">Wird geladen …</p>';
+    gen++;
+    try { await (w === 'guests' ? guests() : w === 'plan' ? plan() : tickets()); } catch (e) { SV.fail(e); }
+  }
+
+  async function pick() {
+    cur = events.find((x) => x.id === $('eventSel').value) || null;
+    if (!cur) return;
+    const t = await sb.from('ticket_types').select('id, name').eq('event_id', cur.id).order('created_at');
+    if (t.error) return SV.fail(t.error);
+    types = t.data;
+    const opts = '<option value="">Alle Ticketarten</option>' + types.map((x) => '<option value="' + x.id + '">' + esc(x.name) + '</option>').join('');
+    $('gType').innerHTML = opts; $('tType').innerHTML = opts;
+    await render();
+  }
+
+  $('printBtn').addEventListener('click', () => window.print());
+  ['what', 'gSort', 'gType', 'gCancel', 'tType', 'tSort'].forEach((id) => $(id).addEventListener('change', render));
+
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    if (events.length) { SV.fillEventSelect($('eventSel'), events); $('eventSel').addEventListener('change', pick); await pick(); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

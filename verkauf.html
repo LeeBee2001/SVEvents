@@ -44,6 +44,7 @@
           <div class="field"><label for="gClass">Klasse</label><input id="gClass" maxlength="20"></div>
           <div class="field"><label for="gMail">E-Mail (optional)</label><input id="gMail" type="email" maxlength="160"><div class="hint">Mit E-Mail wird das Ticket gleich zugeschickt.</div></div>
         </div>
+        <div class="field"><label for="gCode">Rabattcode (optional)</label><input id="gCode" maxlength="30" autocapitalize="characters" style="text-transform:uppercase"><div class="hint" id="codeInfo"></div></div>
         <label class="check" id="checkinWrap" hidden><input type="checkbox" id="gCheckin" checked><span>Direkt einlassen <small class="muted">(Gast ist gleich drin und muss nicht mehr gescannt werden)</small></span></label>
         <button class="btn lg block" type="submit" id="sellBtn">Ticket erstellen</button>
       </form>
@@ -146,7 +147,25 @@
     const ty = sel ? types.find((x) => x.id === sel.value) : null;
     $('checkinWrap').hidden = !(ty && ty.checkin_on_sale);
   }
-  $('choices').addEventListener('change', updateCheckin);
+  $('choices').addEventListener('change', () => { updateCheckin(); checkCode(); });
+
+  // Rabattcode: Preis live prüfen (Server rechnet, die Seite zeigt nur an)
+  let codeSeq = 0, codeTimer = null;
+  async function checkCode() {
+    const seq = ++codeSeq;
+    const code = $('gCode').value.trim();
+    const sel = document.querySelector('input[name="type"]:checked');
+    const info = $('codeInfo');
+    info.className = 'hint'; info.textContent = '';
+    if (!code || !sel) return;
+    const r = await sb.rpc('check_discount', { p_ticket_type_id: sel.value, p_code: code });
+    if (seq !== codeSeq) return;
+    if (r.error) { info.className = 'hint bad'; info.textContent = 'Code konnte nicht geprüft werden.'; return; }
+    if (!r.data.ok) { info.className = 'hint bad'; info.textContent = r.data.error; return; }
+    info.className = 'hint ok';
+    info.textContent = r.data.discount > 0 ? 'Code gültig: ' + money(r.data.price) + ' → ' + money(r.data.price_paid) + ' (−' + money(r.data.discount) + ')' : 'Code gültig, aber kein Nachlass auf diese Ticketart.';
+  }
+  $('gCode').addEventListener('input', () => { clearTimeout(codeTimer); codeTimer = setTimeout(checkCode, 350); });
 
   async function loadStats() {
     const id = $('eventSel').value;
@@ -204,7 +223,8 @@
         p_name: $('gName').value,
         p_class: $('gClass').value.trim() || null,
         p_email: $('gMail').value.trim() || null,
-        p_checkin: !$('checkinWrap').hidden && $('gCheckin').checked
+        p_checkin: !$('checkinWrap').hidden && $('gCheckin').checked,
+        p_code: $('gCode').value.trim() || null
       });
       if (r.error) { SV.fail(r.error); refresh(); return; }
       const t = r.data;
@@ -223,8 +243,10 @@
       $('formPanel').hidden = true;
       $('result').hidden = false;
       $('sellForm').reset();
+      $('codeInfo').textContent = '';
       $('gCheckin').checked = true;
-      SV.toast(t.status === 'inside' ? 'Ticket erstellt – Gast ist drin' : 'Ticket erstellt');
+      const paid = t.price_paid != null ? ' (' + money(t.price_paid) + ')' : '';
+      SV.toast((t.status === 'inside' ? 'Ticket erstellt – Gast ist drin' : 'Ticket erstellt') + paid);
       loadStats(); loadRecent();
       renderChoices();
       // Auswahl der Ticketart beibehalten: die gewählte wieder markieren

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Rabattcodes – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Rabattcodes</h1>
+      <p class="muted">Der Käufer nennt den Code am Stand, der Verkäufer tippt ihn beim Ticketverkauf ein.</p>
+    </div>
+    <div><button class="btn" type="button" id="newCode">Neuer Code</button></div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+    <div id="summary" class="small muted" style="margin:-4px 0 14px"></div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<dialog id="cdDlg">
+  <form class="dlg" id="cdForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="cdTitleH" style="margin:0 0 12px">Rabattcode</h3>
+      <div class="field"><label for="cdCode">Code</label>
+        <div style="display:flex;gap:8px"><input id="cdCode" maxlength="30" placeholder="z. B. HELFER" style="text-transform:uppercase"><button class="btn secondary" type="button" id="cdRand">Zufällig</button></div>
+        <div class="hint">Buchstaben, Zahlen, Bindestrich. Groß-/Kleinschreibung ist egal.</div></div>
+      <div class="grid-2">
+        <div class="field"><label for="cdKind">Art</label>
+          <select id="cdKind"><option value="percent">Prozent</option><option value="amount">Fester Betrag (€)</option><option value="free">Gratis-Ticket</option></select></div>
+        <div class="field" id="cdValWrap"><label for="cdVal" id="cdValLbl">Prozent</label><input id="cdVal" type="text" inputmode="decimal" placeholder="z. B. 20 oder 1,50"></div>
+      </div>
+      <div class="field"><span class="label">Gilt für</span>
+        <label class="check"><input id="cdAll" type="checkbox" checked> Alle Ticketarten</label>
+        <div id="cdTypes" style="margin-left:26px"></div></div>
+      <div class="field"><label for="cdMax">Maximal einlösbar (leer = unbegrenzt)</label><input id="cdMax" type="number" min="1" step="1" inputmode="numeric"></div>
+      <div class="grid-2">
+        <div class="field"><label for="cdFrom">Gültig ab (optional)</label><input id="cdFrom" type="datetime-local"></div>
+        <div class="field"><label for="cdUntil">Gültig bis (optional)</label><input id="cdUntil" type="datetime-local"></div>
+      </div>
+      <div class="field"><label for="cdNote">Notiz (optional)</label><input id="cdNote" maxlength="200" placeholder="z. B. für Helfer der 10b"></div>
+      <label class="check"><input id="cdActive" type="checkbox" checked> Code ist eingeschaltet</label>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="cdCancel">Abbrechen</button><button class="btn" type="submit" id="cdOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'rabatt', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, money, fmt, $ } = SV;
+  let events = [], cur = null, codes = [], types = [], uses = {}, editing = null;
+
+  const kindText = (c) => c.kind === 'free' ? 'Gratis' : c.kind === 'percent' ? String(Number(c.value)).replace('.', ',') + ' %' : money(c.value);
+
+  async function load() {
+    const ev = cur;
+    const [a, b] = await Promise.all([
+      sb.from('discount_codes').select('*').eq('event_id', ev.id).order('created_at'),
+      sb.from('ticket_types').select('id, name, price').eq('event_id', ev.id).order('created_at')
+    ]);
+    [a, b].forEach((r) => { if (r.error) throw r.error; });
+    const ids = a.data.map((c) => c.id);
+    let t = { data: [] };
+    if (ids.length) {
+      t = await sb.from('tickets').select('discount_code_id, discount_amount, status').in('discount_code_id', ids);
+      if (t.error) throw t.error;
+    }
+    if (cur !== ev) return;
+    codes = a.data; types = b.data; uses = {};
+    (t.data || []).forEach((x) => {
+      if (x.status === 'cancelled') return;
+      const u = uses[x.discount_code_id] || (uses[x.discount_code_id] = { n: 0, sum: 0 });
+      u.n++; u.sum += Number(x.discount_amount) || 0;
+    });
+    render();
+  }
+
+  function state(c) {
+    const n = (uses[c.id] || {}).n || 0, now = Date.now();
+    if (!c.active) return { cls: 'bad', text: 'aus' };
+    if (c.valid_until && now > new Date(c.valid_until).getTime()) return { cls: 'bad', text: 'abgelaufen' };
+    if (c.valid_from && now < new Date(c.valid_from).getTime()) return { cls: 'warn', text: 'noch nicht gültig' };
+    if (c.max_uses && n >= c.max_uses) return { cls: 'bad', text: 'aufgebraucht' };
+    return { cls: 'ok', text: 'aktiv' };
+  }
+
+  function render() {
+    const total = Object.values(uses).reduce((s, u) => ({ n: s.n + u.n, sum: s.sum + u.sum }), { n: 0, sum: 0 });
+    $('summary').textContent = codes.length ? total.n + ' Einlösungen, ' + money(total.sum) + ' Nachlass insgesamt.' : '';
+    if (!codes.length) { $('list').innerHTML = '<div class="empty"><b>Noch kein Rabattcode</b>Lege z. B. „HELFER“ als Gratis-Code an.</div>'; return; }
+    $('list').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Code</th><th>Nachlass</th><th>Gilt für</th><th class="right">Eingelöst</th><th>Gültigkeit</th><th>Status</th><th></th></tr></thead><tbody>' +
+      codes.map((c) => {
+        const u = uses[c.id] || { n: 0, sum: 0 }, s = state(c);
+        const forTxt = c.ticket_type_ids ? c.ticket_type_ids.map((id) => (types.find((t) => t.id === id) || {}).name || '?').join(', ') : 'alle';
+        const valid = [c.valid_from ? 'ab ' + fmt(c.valid_from) : '', c.valid_until ? 'bis ' + fmt(c.valid_until) : ''].filter(Boolean).join(' ') || '–';
+        return '<tr data-id="' + c.id + '"><td><b class="num">' + esc(c.code) + '</b>' + (c.note ? '<div class="muted small">' + esc(c.note) + '</div>' : '') + '</td><td>' + esc(kindText(c)) + '</td><td class="muted">' + esc(forTxt) + '</td>' +
+          '<td class="right num">' + u.n + (c.max_uses ? ' / ' + c.max_uses : '') + (u.sum ? '<div class="muted small">' + esc(money(u.sum)) + '</div>' : '') + '</td><td class="muted small">' + esc(valid) + '</td>' +
+          '<td><span class="badge ' + s.cls + '">' + s.text + '</span></td>' +
+          '<td class="right"><button class="btn link" type="button" data-act="edit">Bearbeiten</button><button class="btn link" type="button" data-act="toggle">' + (c.active ? 'Ausschalten' : 'Einschalten') + '</button><button class="btn link" type="button" data-act="del">Löschen</button></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const c = codes.find((x) => x.id === b.closest('[data-id]').dataset.id);
+    try {
+      if (b.dataset.act === 'edit') openCode(c);
+      else if (b.dataset.act === 'toggle') {
+        const r = await sb.from('discount_codes').update({ active: !c.active }).eq('id', c.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (b.dataset.act === 'del') {
+        if (!await SV.confirmBox('„' + c.code + '“ wird gelöscht. Bereits verkaufte Tickets behalten ihren Preis, aber die Zuordnung zum Code geht verloren. Zum Pausieren lieber ausschalten.', { title: 'Code löschen?', ok: 'Löschen', danger: true })) return;
+        const r = await sb.from('discount_codes').delete().eq('id', c.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      }
+    } catch (err) { SV.fail(err); }
+  });
+
+  function syncKind() {
+    const k = $('cdKind').value;
+    $('cdValWrap').hidden = k === 'free';
+    $('cdValLbl').textContent = k === 'percent' ? 'Prozent (1–100)' : 'Betrag in €';
+  }
+  $('cdKind').addEventListener('change', syncKind);
+  $('cdAll').addEventListener('change', () => { $('cdTypes').hidden = $('cdAll').checked; });
+
+  function openCode(c) {
+    editing = c || null;
+    $('cdTitleH').textContent = c ? 'Code bearbeiten' : 'Neuer Rabattcode';
+    $('cdCode').value = c ? c.code : '';
+    $('cdKind').value = c ? c.kind : 'percent';
+    $('cdVal').value = c && c.value != null ? Number(c.value) : '';
+    $('cdMax').value = c && c.max_uses ? c.max_uses : '';
+    $('cdFrom').value = c && c.valid_from ? SV.toLocalInput(c.valid_from) : '';
+    $('cdUntil').value = c && c.valid_until ? SV.toLocalInput(c.valid_until) : '';
+    $('cdNote').value = c ? (c.note || '') : '';
+    $('cdActive').checked = c ? c.active : true;
+    const sel = c && c.ticket_type_ids ? c.ticket_type_ids : [];
+    $('cdAll').checked = !(c && c.ticket_type_ids);
+    $('cdTypes').innerHTML = types.map((t) => '<label class="check"><input type="checkbox" value="' + t.id + '"' + (sel.includes(t.id) ? ' checked' : '') + '> ' + esc(t.name) + ' <span class="muted small">' + esc(money(t.price)) + '</span></label>').join('');
+    $('cdTypes').hidden = $('cdAll').checked;
+    syncKind();
+    $('cdDlg').showModal();
+  }
+  $('newCode').addEventListener('click', () => openCode(null));
+  $('cdCancel').addEventListener('click', () => $('cdDlg').close());
+  $('cdRand').addEventListener('click', () => {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // ohne verwechselbare Zeichen (0/O, 1/I)
+    $('cdCode').value = Array.from(crypto.getRandomValues(new Uint8Array(6))).map((v) => A[v % A.length]).join('');
+  });
+  $('cdForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = $('cdCode').value.trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9_-]{1,29}$/.test(code)) return SV.toast('Der Code braucht 2–30 Zeichen: Buchstaben, Zahlen oder Bindestrich.', 'bad');
+    const kind = $('cdKind').value;
+    let value = null;
+    if (kind !== 'free') {
+      value = parseFloat(String($('cdVal').value).replace(',', '.'));
+      if (!(value > 0)) return SV.toast('Bitte einen Wert größer als 0 eingeben.', 'bad');
+      if (kind === 'percent' && value > 100) return SV.toast('Prozent darf höchstens 100 sein.', 'bad');
+    }
+    let tids = null;
+    if (!$('cdAll').checked) {
+      tids = Array.from($('cdTypes').querySelectorAll('input:checked')).map((i) => i.value);
+      if (!tids.length) return SV.toast('Wähle mindestens eine Ticketart oder „Alle Ticketarten“.', 'bad');
+    }
+    const max = $('cdMax').value === '' ? null : parseInt($('cdMax').value, 10);
+    if (max !== null && !(max >= 1)) return SV.toast('Maximal einlösbar muss mindestens 1 sein.', 'bad');
+    const from = SV.fromLocalInput($('cdFrom').value), until = SV.fromLocalInput($('cdUntil').value);
+    if (from && until && new Date(until) <= new Date(from)) return SV.toast('„Gültig bis“ muss nach „Gültig ab“ liegen.', 'bad');
+    const row = { code: code, kind: kind, value: value, ticket_type_ids: tids, max_uses: max, valid_from: from, valid_until: until, note: $('cdNote').value.trim() || null, active: $('cdActive').checked };
+    await SV.busy($('cdOk'), async () => {
+      const r = editing ? await sb.from('discount_codes').update(row).eq('id', editing.id) : await sb.from('discount_codes').insert(Object.assign({ event_id: cur.id }, row));
+      if (r.error) return SV.fail(r.error.code === '23505' ? { message: 'Diesen Code gibt es für das Event schon.' } : r.error);
+      $('cdDlg').close();
+      await load();
+    });
+  });
+
+  function pick() { cur = events.find((x) => x.id === $('eventSel').value) || null; return cur ? load().catch(SV.fail) : Promise.resolve(); }
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    $('newCode').hidden = events.length === 0;
+    if (events.length) { SV.fillEventSelect($('eventSel'), events); $('eventSel').addEventListener('change', pick); await pick(); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

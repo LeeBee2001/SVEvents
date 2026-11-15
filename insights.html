@@ -19,12 +19,13 @@
       <h1>Insights</h1>
       <p class="muted">Besucher, Einnahmen, Kosten und Gewinn eines Events.</p>
     </div>
-    <div class="actions"><button class="btn danger" type="button" id="resetBtn" hidden>Insights zurücksetzen</button></div>
+    <div class="actions noprint"><button class="btn secondary" type="button" id="pdfBtn">Als PDF speichern</button><button class="btn danger" type="button" id="resetBtn" hidden>Insights zurücksetzen</button></div>
   </div>
   <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
   <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
 
   <div id="report" hidden>
+    <div class="print-only pr-head" id="prHead"></div>
     <div class="figures" id="figs"></div>
 
     <section class="section">
@@ -234,6 +235,7 @@
       : '<p class="muted">Noch keine Kosten eingetragen.</p>';
     $('result').innerHTML = '<div class="tablewrap"><table class="data"><tbody>' +
       '<tr><td>Einnahmen</td><td class="right num">' + esc(money(rev)) + '</td></tr>' +
+      (data.discN ? '<tr><td class="muted">davon Rabatte gewährt <span class="small">(' + data.discN + ' Tickets' + (data.freeN ? ', ' + data.freeN + ' gratis' : '') + ')</span></td><td class="right num muted">− ' + esc(money(data.discTotal)) + '</td></tr>' : '') +
       '<tr><td>Kosten' + (open ? ' <span class="muted small">(' + open + ' Posten noch geplant)</span>' : '') + '</td><td class="right num">− ' + esc(money(sum)) + '</td></tr>' +
       '<tr class="total"><td>' + (profit < 0 ? 'Verlust' : 'Gewinn') + (open ? ' <span class="muted small">(voraussichtlich)</span>' : '') + '</td><td class="right num ' + (profit < 0 ? 'neg' : 'pos') + '">' + esc(money(profit)) + '</td></tr>' +
       (costs.length ? '<tr><td class="muted">Kosten geplant</td><td class="right num muted">' + esc(money(planned)) + '</td></tr>' +
@@ -255,11 +257,12 @@
 
   async function load() {
     $('report').hidden = !cur;
+    if (cur) $('prHead').innerHTML = '<div><div class="pr-ev">' + esc(cur.name) + '</div><h2>Insights</h2></div><div class="pr-meta">' + (cur.starts_at ? esc(SV.fmtDay(cur.starts_at)) + (cur.location ? ' · ' + esc(cur.location) : '') + '<br>' : '') + 'Stand: ' + esc(SV.fmtDay(new Date()) + ', ' + SV.fmtTime(new Date())) + ' Uhr</div>';
     $('resetBtn').hidden = !cur;
     if (!cur) return;
     const [types, tickets, log, costRows] = await Promise.all([
       sb.from('ticket_types').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; }),
-      fetchAll(() => sb.from('tickets').select('id, status, ticket_type_id, created_at').eq('event_id', cur.id).order('created_at')),
+      fetchAll(() => sb.from('tickets').select('id, status, ticket_type_id, created_at, price_paid, discount_amount').eq('event_id', cur.id).order('created_at')),
       fetchAll(() => sb.from('scan_log').select('ticket_id, direction, result, scanned_at, tickets!inner(event_id)').eq('tickets.event_id', cur.id).order('scanned_at')),
       sb.from('event_costs').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; })
     ]);
@@ -269,16 +272,18 @@
     const live = tickets.filter((t) => t.status !== 'cancelled' && byId[t.ticket_type_id]);
     const pts = curvePoints(log);
     const stat = {}; types.forEach((t) => { stat[t.id] = { n: 0, rev: 0, cancelled: 0, came: 0 }; });
-    let revenue = 0;
+    let revenue = 0, discTotal = 0, discN = 0, freeN = 0;
     tickets.forEach((t) => {
       const s = stat[t.ticket_type_id]; if (!s) return;
       if (t.status === 'cancelled') { s.cancelled++; return; }
-      s.n++; s.rev += Number(byId[t.ticket_type_id].price);
+      s.n++; s.rev += t.price_paid != null ? Number(t.price_paid) : Number(byId[t.ticket_type_id].price);
+      if (t.discount_amount) { discTotal += Number(t.discount_amount); discN++; }
+      if (t.price_paid != null && Number(t.price_paid) === 0 && Number(byId[t.ticket_type_id].price) > 0) freeN++;
       if (everIn.has(t.id)) s.came++;
     });
     types.forEach((t) => { revenue += stat[t.id].rev; });
     const entered = live.filter((t) => everIn.has(t.id)).length;
-    data = { revenue, entered, sold: live.length, noShows: live.length - entered, peak: null };
+    data = { discTotal, discN, freeN, revenue, entered, sold: live.length, noShows: live.length - entered, peak: null };
 
     data.peak = drawCurve($('curve'), pts);
     $('curveNote').textContent = data.peak ? 'Höchststand ' + data.peak.n + ' um ' + fmtDT(data.peak.t) + ' Uhr' : '';
@@ -363,6 +368,7 @@
     });
   });
 
+  $('pdfBtn').addEventListener('click', () => window.print());
   try {
     events = await SV.loadEvents();
     $('empty').hidden = events.length > 0;

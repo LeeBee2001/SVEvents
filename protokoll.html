@@ -31,6 +31,7 @@
       </select>
     </div>
   </div>
+  <div id="devStats"></div>
   <div id="table"></div>
 </main>
 
@@ -57,7 +58,7 @@
 
   async function load() {
     const r = await sb.from('scan_log')
-      .select('id, direction, result, source, scanned_at, tickets(guest_name, event_id, events(name)), profiles(name)')
+      .select('id, direction, result, source, device, scanned_at, tickets(guest_name, event_id, events(name)), profiles(name)')
       .order('scanned_at', { ascending: false }).limit(300);
     if (r.error) throw r.error;
     rows = r.data;
@@ -79,14 +80,26 @@
       if (res === 'problem' && l.result === 'ok') return false;
       return true;
     });
+    loadDevices(ev);
     if (!list.length) { $('table').innerHTML = '<div class="empty"><b>Keine Einträge</b>Sobald am Einlass gescannt wird, erscheinen die Scans hier.</div>'; return; }
-    $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Gast</th><th>Event</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gescannt von</th></tr></thead><tbody>' +
+    $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Gast</th><th>Event</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gerät</th><th>Gescannt von</th></tr></thead><tbody>' +
       list.map((l) => {
         const r = RESULT[l.result] || [l.result, ''];
         return '<tr><td class="nowrap">' + esc(fmt(l.scanned_at)) + '</td><td>' + esc(l.tickets ? l.tickets.guest_name : '–') + '</td><td>' +
           esc(l.tickets && l.tickets.events ? l.tickets.events.name : '–') + '</td><td>' + (l.direction === 'in' ? 'Eingang' : 'Ausgang') +
-          '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + (l.source === 'manual' ? 'Von Hand' : l.source === 'sale' ? 'Abendkasse' : 'Scan') + '</td><td>' + esc(l.profiles ? l.profiles.name : '') + '</td></tr>';
+          '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + (l.source === 'manual' ? 'Von Hand' : l.source === 'sale' ? 'Abendkasse' : 'Scan') + '</td><td>' + esc(l.device || '–') + '</td><td>' + esc(l.profiles ? l.profiles.name : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>';
+  }
+
+  // Zahlen je Einlassgerät (nur wenn ein Event gewählt ist)
+  let devSeq = 0;
+  async function loadDevices(ev) {
+    const seq = ++devSeq;
+    if (!ev) { $('devStats').innerHTML = ''; return; }
+    const r = await sb.rpc('device_stats', { p_event_id: ev });
+    if (seq !== devSeq || r.error || !r.data || !r.data.length) { if (seq === devSeq) $('devStats').innerHTML = ''; return; }
+    $('devStats').innerHTML = '<section class="section"><div class="section-head"><h2>Einlass je Gerät</h2></div><div class="tablewrap"><table class="data"><thead><tr><th>Gerät</th><th class="right">Eingelassen</th><th class="right">Ausgang</th><th class="right">Abgelehnt</th><th>Zuletzt</th></tr></thead><tbody>' +
+      r.data.map((d) => '<tr><td>' + esc(d.device) + '</td><td class="right num">' + d.entered + '</td><td class="right num">' + d.left_out + '</td><td class="right num">' + d.rejected + '</td><td class="muted nowrap">' + esc(fmt(d.last_at)) + '</td></tr>').join('') + '</tbody></table></div></section>';
   }
 
   $('eventSel').addEventListener('change', render);

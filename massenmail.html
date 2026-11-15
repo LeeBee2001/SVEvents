@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Rundmail – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Rundmail</h1>
+      <p class="muted">Eine Nachricht an die Käufer eines Events, z. B. Erinnerung vorher oder Danke nachher.</p>
+    </div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+
+    <div class="split mail-split">
+      <div>
+        <div class="panel" style="margin-bottom:18px">
+          <h3 style="margin:0 0 12px">1. Wer bekommt die Mail?</h3>
+          <div class="field"><span class="label">Ticketarten</span><div id="types"></div></div>
+          <div class="field"><span class="label">Einlass</span>
+            <label class="check"><input type="radio" name="entry" value="all" checked> Alle Käufer</label>
+            <label class="check"><input type="radio" name="entry" value="not_in"> Nur wer noch nicht eingelassen wurde</label>
+            <label class="check"><input type="radio" name="entry" value="was_in"> Nur wer schon eingelassen wurde</label>
+          </div>
+          <div id="count" class="hint" style="font-size:14px"></div>
+          <details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">Empfänger anzeigen</summary><div id="recList" class="small" style="margin-top:8px;max-height:220px;overflow:auto"></div></details>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin:0 0 12px">2. Nachricht</h3>
+          <div class="field"><label for="subject">Betreff</label><input id="subject" maxlength="150" placeholder="z. B. Morgen ist es soweit: {{event}}"></div>
+          <div class="field"><label for="body">Text</label>
+            <textarea id="body" rows="10" maxlength="5000" placeholder="Hallo {{name}},&#10;&#10;morgen um 18 Uhr geht es los …"></textarea>
+            <div class="hint">Leerzeile = neuer Absatz. Platzhalter werden pro Empfänger ersetzt:</div>
+            <div class="chips" id="chips"></div>
+          </div>
+          <div class="hint">Farben und Logo kommen automatisch vom Event.</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="label">Vorschau</div>
+        <iframe id="preview" class="preview" sandbox title="Vorschau der E-Mail"></iframe>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn secondary" type="button" id="testBtn">Probe an mich</button>
+          <button class="btn" type="button" id="sendBtn" disabled>Senden</button>
+          <button class="btn secondary" type="button" id="resumeBtn" hidden>Fortsetzen (nur noch offene)</button>
+        </div>
+        <div id="warn" class="hint bad" style="margin-top:8px" hidden></div>
+        <div id="prog" hidden style="margin-top:14px">
+          <div style="height:8px;border-radius:999px;background:var(--line);overflow:hidden"><div id="bar" style="height:100%;width:0;background:var(--accent)"></div></div>
+          <div id="progTxt" class="small muted" style="margin-top:6px"></div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin:28px 0 8px">Bisherige Rundmails</h3>
+    <div id="hist"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'massenmail', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc, fmt } = SV;
+
+  const BATCH = 8;
+  const CHIPS = [['name', 'Name des Gasts'], ['klasse', 'Klasse'], ['ticketart', 'Ticketart'], ['event', 'Eventname'], ['datum', 'Datum und Uhrzeit'], ['ort', 'Ort']];
+  let events = [], cur = null, types = [], recips = [], sending = false;
+
+  const whenTxt = (iso) => { try { return iso ? new Date(iso).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' Uhr' : ''; } catch (e) { return ''; } };
+  const sample = () => ({ name: 'Max Mustermann', klasse: '8a', ticketart: (types[0] && types[0].name) || 'Vorverkauf', event: cur ? cur.name : '', datum: whenTxt(cur && cur.starts_at), ort: (cur && cur.location) || '' });
+  const hex = (h, d) => (/^#[0-9a-fA-F]{6}$/.test(h || '') ? h : d);
+  const dark = (h, k) => '#' + [1, 3, 5].map((i) => Math.round(parseInt(h.slice(i, i + 2), 16) * (1 - k)).toString(16).padStart(2, '0')).join('');
+  const inkOn = (h) => { const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.4 ? '#0b0d12' : '#ffffff'; };
+
+  // Gleiche Hülle wie in der Edge Function send-bulk, nur für die Vorschau
+  function html() {
+    const v = sample();
+    const a1 = hex(cur && cur.accent, '#2140c3'), a2 = hex(cur && cur.accent2, dark(a1, 0.35));
+    const logo = cur && /^https:\/\/[^\s<>"']+$/.test(cur.logo_url || '') ? '<img src="' + esc(cur.logo_url) + '" alt="" height="40" style="display:block;height:40px;width:auto;max-width:200px;border:0;margin:0 0 14px;">' : '';
+    const text = $('body').value || 'Hier erscheint dein Text.';
+    const inner = esc(text).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => esc(v[k] || '')).split(/\n{2,}/).map((p) => '<p style="margin:0 0 16px;font-size:16px;line-height:1.6;">' + p.trim().replace(/\n/g, '<br>') + '</p>').join('');
+    return '<!doctype html><html><body style="margin:0;background:#f2f3f5;"><table width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px;"><tr><td align="center"><table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border-radius:14px;overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#15171c;"><tr><td style="background:' + a1 + ';background-image:linear-gradient(135deg,' + a1 + ',' + a2 + ');padding:26px 28px 22px;">' + logo + '<div style="font-size:22px;font-weight:700;color:' + inkOn(a1) + ';">' + esc(cur ? cur.name : '') + '</div></td></tr><tr><td style="padding:28px 28px 8px;">' + inner + '</td></tr><tr><td style="padding:16px 28px 22px;border-top:1px solid #e6e8ec;font-size:12px;color:#6b7280;">Diese Nachricht wurde von der SV verschickt. Auf diese Adresse kannst du nicht antworten.</td></tr></table></td></tr></table></body></html>';
+  }
+  function preview() { $('preview').srcdoc = html(); updateSend(); }
+
+  $('chips').innerHTML = CHIPS.map((c) => '<button type="button" class="chip" data-ph="' + c[0] + '" title="' + esc(c[1]) + '">{{' + c[0] + '}}</button>').join('');
+  $('chips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-ph]'); if (!b) return;
+    const ta = $('body'), tx = '{{' + b.dataset.ph + '}}', s = ta.selectionStart, en = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + tx + ta.value.slice(en);
+    ta.focus(); ta.selectionStart = ta.selectionEnd = s + tx.length;
+    ta.dispatchEvent(new Event('input'));
+  });
+  let timer = null;
+  ['subject', 'body'].forEach((id) => $(id).addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); }));
+
+  const chosenTypes = () => { const all = [...document.querySelectorAll('#types input')]; const on = all.filter((i) => i.checked); return on.length === all.length ? null : on.map((i) => i.value); };
+  const entry = () => (document.querySelector('input[name=entry]:checked') || {}).value || 'all';
+  const formOk = () => $('subject').value.trim() && $('body').value.trim();
+
+  function updateSend() {
+    const n = recips.length;
+    $('sendBtn').disabled = sending || !n || !formOk();
+    $('sendBtn').textContent = n ? 'An ' + n + ' Empfänger senden' : 'Senden';
+    $('warn').hidden = n <= 400;
+    $('warn').textContent = n > 400 ? 'Achtung: Gmail erlaubt ca. 500 Mails pro Tag. Bei so vielen Empfängern besser auf zwei Tage aufteilen (nach Ticketart filtern).' : '';
+  }
+
+  async function loadRecipients() {
+    if (!cur) return;
+    const ids = chosenTypes();
+    if (ids && !ids.length) { recips = []; $('count').textContent = 'Keine Ticketart ausgewählt.'; $('recList').innerHTML = ''; updateSend(); return; }
+    const r = await sb.rpc('bulk_recipients', { p_event: cur.id, p_type_ids: ids, p_entry: entry() });
+    if (r.error) return SV.fail(r.error);
+    recips = r.data.recipients || [];
+    const noMail = r.data.without_email;
+    $('count').innerHTML = '<b>' + recips.length + '</b> Empfänger' + (recips.length !== r.data.tickets - noMail ? ' (mehrere Tickets mit derselben Adresse bekommen nur eine Mail)' : '') +
+      (noMail ? '<br>' + noMail + ' Ticket' + (noMail === 1 ? '' : 's') + ' ohne E-Mail-Adresse bekommen keine Mail.' : '');
+    $('recList').innerHTML = recips.length ? recips.map((x) => '<div>' + esc(x.name) + (x.klass ? ', ' + esc(x.klass) : '') + ' <span class="muted">' + esc(x.email) + '</span></div>').join('') : '<span class="muted">Niemand.</span>';
+    updateSend();
+  }
+
+  async function loadHist() {
+    const r = await sb.rpc('bulk_mail_list', { p_event: cur.id });
+    if (r.error) return SV.fail(r.error);
+    $('hist').innerHTML = r.data.length ? r.data.map((c) =>
+      '<div class="rowline"><div><b>' + esc(c.subject) + '</b><div class="small muted">' + esc(fmt(c.created_at)) + (c.created_by_name ? ' · ' + esc(c.created_by_name) : '') + '</div></div>' +
+      '<div class="small" style="text-align:right">' + c.sent + ' von ' + c.total + ' gesendet' + (Number(c.failed) ? '<br><span class="hint bad">' + c.failed + ' fehlgeschlagen</span>' : '') + '</div></div>').join('')
+      : '<p class="muted small">Noch keine Rundmail verschickt.</p>';
+  }
+
+  async function load() {
+    const t = await sb.from('ticket_types').select('id, name').eq('event_id', cur.id).order('created_at');
+    if (t.error) return SV.fail(t.error);
+    types = t.data;
+    $('types').innerHTML = types.map((x) => '<label class="check"><input type="checkbox" value="' + x.id + '" checked> ' + esc(x.name) + '</label>').join('') || '<span class="muted small">Dieses Event hat noch keine Ticketarten.</span>';
+    await Promise.all([loadRecipients(), loadHist()]);
+    preview();
+  }
+
+  $('types').addEventListener('change', loadRecipients);
+  document.querySelectorAll('input[name=entry]').forEach((i) => i.addEventListener('change', loadRecipients));
+
+  $('testBtn').addEventListener('click', () => SV.busy($('testBtn'), async () => {
+    if (!formOk()) return SV.toast('Bitte Betreff und Text eingeben', 'bad');
+    const r = await sb.functions.invoke('send-bulk', { body: { test: true, event_id: cur.id, subject: $('subject').value, body: $('body').value } });
+    let msg = r.error ? (r.error.message || '') : (r.data && r.data.error) || '';
+    if (r.error) { try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ } }
+    if (msg) return SV.toast(msg, 'bad');
+    SV.toast('Probe an ' + r.data.to + ' gesendet');
+  }));
+
+  async function invoke(body) {
+    const r = await sb.functions.invoke('send-bulk', { body });
+    let msg = r.error ? (r.error.message || 'Fehler') : (r.data && r.data.error) || '';
+    if (r.error) { try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ } }
+    return msg ? { error: msg } : r.data;
+  }
+
+  let resume = null; // { cid, list } nach einem Abbruch oder bei Fehlern
+
+  async function run(cid, list) {
+    const n = list.length;
+    sending = true; updateSend(); $('resumeBtn').hidden = true;
+    $('prog').hidden = false; $('bar').style.width = '0%';
+    let done = 0, sent = 0, skipped = 0, failed = [], stopped = '';
+    try {
+      for (let i = 0; i < n; i += BATCH) {
+        const part = list.slice(i, i + BATCH);
+        const r = await invoke({ campaign_id: cid, ticket_ids: part.map((x) => x.ticket_id) });
+        if (r.error) { stopped = r.error; break; }
+        sent += r.sent; skipped += r.skipped || 0; failed = failed.concat(r.failed || []);
+        done += part.length;
+        $('bar').style.width = Math.round(done / n * 100) + '%';
+        $('progTxt').textContent = done + ' von ' + n + ' bearbeitet';
+      }
+    } catch (e) { stopped = String(e.message || e); }
+    sending = false; updateSend();
+    $('progTxt').innerHTML = esc(sent + ' gesendet' + (skipped ? ', ' + skipped + ' waren schon versorgt' : '') + '.') +
+      (failed.length ? ' <span class="hint bad">' + failed.length + ' fehlgeschlagen.</span>' : '') +
+      (stopped ? '<br><span class="hint bad">Unterbrochen: ' + esc(stopped) + '</span>' : '');
+    resume = stopped || failed.length ? { cid: cid, list: list } : null;
+    $('resumeBtn').hidden = !resume;
+    SV.toast(stopped ? 'Versand unterbrochen' : failed.length ? sent + ' gesendet, ' + failed.length + ' fehlgeschlagen' : sent + ' Mails gesendet', stopped || failed.length ? 'bad' : undefined);
+    loadHist();
+  }
+
+  $('sendBtn').addEventListener('click', async () => {
+    if (sending || !recips.length || !formOk()) return;
+    const n = recips.length;
+    const ok = await SV.confirmBox('Die Mail geht an ' + n + ' Empfänger und kann nicht zurückgeholt werden. Hast du die Probe an dich geprüft?', { title: 'Jetzt senden?', ok: 'An ' + n + ' senden' });
+    if (!ok) return;
+    const c = await sb.rpc('bulk_mail_start', { p_event: cur.id, p_subject: $('subject').value, p_body: $('body').value, p_filter: { types: chosenTypes(), entry: entry() }, p_total: n });
+    if (c.error) return SV.fail(c.error);
+    await run(c.data, recips.slice());
+  });
+  $('resumeBtn').addEventListener('click', () => { if (resume && !sending) run(resume.cid, resume.list); });
+
+  function pick() { cur = events.find((x) => x.id === $('eventSel').value) || null; return cur ? load().catch(SV.fail) : Promise.resolve(); }
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    if (events.length) { SV.fillEventSelect($('eventSel'), events); $('eventSel').addEventListener('change', pick); await pick(); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

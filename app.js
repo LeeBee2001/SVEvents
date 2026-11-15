@@ -50,14 +50,18 @@
     { id: 'einlass', href: 'einlass.html', label: 'Einlass', need: 'scan', group: 'Heute', icon: 'M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4zM8 8h8v8H8V8z' },
     { id: 'schicht', href: 'schicht.html', label: 'Meine Schicht', short: 'Schicht', need: 'stations', staffOnly: true, group: 'Heute', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v5.4l3.5 2.1-1 1.7L11 13V7h2z' },
     { id: 'events', href: 'events.html', label: 'Events', need: 'admin', group: 'Planung', icon: 'M7 2v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2H7zm-2 8h14v10H5V10z' },
+    { id: 'kontrolle', href: 'kontrolle.html', label: 'Kontrolle', need: 'admin', group: 'Heute', icon: 'M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.500-11-7.500zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z' },
     { id: 'stationen', href: 'stationen.html', label: 'Stationen & Schichten', short: 'Stationen', need: 'admin', group: 'Planung', icon: 'M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.500a2.5 2.5 0 0 1 0 5z' },
     { id: 'ablauf', href: 'ablauf.html', label: 'Ablauf & Aufgaben', short: 'Ablauf', need: 'admin', group: 'Planung', icon: 'M5 3h14v2H5V3zm0 8h14v2H5v-2zm0 8h14v2H5v-2zM3 4a1 1 0 1 1 0 .1V4zm0 8a1 1 0 1 1 0 .1V12zm0 8a1 1 0 1 1 0 .1V20z' },
     { id: 'anzeigen', href: 'anzeigen.html', label: 'Anzeigen', need: 'admin', group: 'Planung', icon: 'M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6H4z' },
+    { id: 'rabatt', href: 'rabatt.html', label: 'Rabattcodes', need: 'admin', group: 'Planung', icon: 'M21.4 11.6l-9-9A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 .6 1.4l9 9a2 2 0 0 0 2.8 0l7-7a2 2 0 0 0 0-2.8zM6.5 8A1.5 1.5 0 1 1 6.5 5a1.5 1.5 0 0 1 0 3z' },
     { id: 'aktionen', href: 'aktionen.html', label: 'Aktionen', need: 'campaigns', group: 'Planung', icon: 'M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8L12 2z' },
     { id: 'gaeste', href: 'gaeste.html', label: 'Gästeliste', need: 'admin', group: 'Gäste', icon: 'M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM4 21a8 8 0 0 1 16 0H4z' },
     { id: 'mailvorlage', href: 'mailvorlage.html', label: 'Mail-Vorlage', need: 'admin', group: 'Gäste', icon: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v.5l8 5 8-5V7H4z' },
+    { id: 'massenmail', href: 'massenmail.html', label: 'Rundmail', need: 'admin', group: 'Gäste', icon: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v.5l8 5 8-5V7H4z' },
     { id: 'insights', href: 'insights.html', label: 'Insights', need: 'admin', group: 'Auswertung', icon: 'M4 20V10h4v10H4zm6 0V4h4v16h-4zm6 0v-7h4v7h-4z' },
     { id: 'protokoll', href: 'protokoll.html', label: 'Scan-Protokoll', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
+    { id: 'drucken', href: 'drucken.html', label: 'Drucken / PDF', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
     { id: 'benutzer', href: 'benutzer.html', label: 'Benutzer', need: 'admin', group: 'Verwaltung', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z' }
   ];
   const CAP_LABEL = { sell: 'Verkauf', scan: 'Einlass', campaigns: 'Aktionen', stations: 'Schicht' };
@@ -332,7 +336,14 @@
       wrap(t.event, '700 38px ' + FONT, 1, maxW - (lw ? lw + 16 : 0)).forEach((l) => g.fillText(l, left, cy + headerH / 2 + 14));
       nameBase = cy + headerH + 84; maxSize = 56;
     } else {
-      const lw = drawLogo(left, cy + 44, 170, 56, false);
+      let lw = 0;
+      if (style === 'classic' && lg) {
+        // Plakette in der Eventfarbe: so bleibt auch ein weißes Logo auf der weißen Karte sichtbar
+        const k0 = Math.min(170 / lg.naturalWidth, 56 / lg.naturalHeight, 1.6);
+        const pw = lg.naturalWidth * k0 + 28, ph = 56 + 20;
+        g.fillStyle = mix(th.c1, th.c2, 0.5); rr(left, cy + 34, pw, ph, 14); g.fill();
+        lw = drawLogo(left + 14, cy + 44, 170, 56, false) + 28;
+      } else lw = drawLogo(left, cy + 44, 170, 56, false);
       g.fillStyle = style === 'elegant' ? mix(th.c1, '#ffffff', lum(th.c1) < 0.3 ? 0.5 : 0.1) : sub;
       g.font = '500 30px ' + FONT;
       wrap(t.event, '500 30px ' + FONT, 1, maxW - (lw ? lw + 20 : 0)).forEach((l) => g.fillText(l, left + (lw ? lw + 20 : 0), evBase));
@@ -530,6 +541,10 @@
   function navHtml(items, page) {
     const grouped = items.length > 4;
     let last = '', html = '';
+    // Punkte einer Gruppe stehen zusammen (Reihenfolge der Gruppen = erstes Auftreten)
+    const order = [];
+    items.forEach((n) => { if (order.indexOf(n.group) < 0) order.push(n.group); });
+    items = items.map((n, i) => ({ n: n, i: i })).sort((a, b) => order.indexOf(a.n.group) - order.indexOf(b.n.group) || a.i - b.i).map((x) => x.n);
     items.forEach((n) => {
       if (grouped && n.group !== last) { html += '<div class="nav-group">' + esc(n.group) + '</div>'; last = n.group; }
       html += '<a href="' + n.href + '"' + (n.id === page ? ' aria-current="page"' : '') + '>' + n.label + '</a>';

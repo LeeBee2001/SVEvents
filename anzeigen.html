@@ -36,6 +36,8 @@
       <div class="field"><label for="scName">Name (nur für dich)</label><input id="scName" maxlength="60" placeholder="z. B. Schulhof-Bildschirm"></div>
       <div class="field"><label for="scMode">Darstellung</label>
         <select id="scMode"><option value="auto">Normal (Countdown, freie Plätze, Danke)</option><option value="test">Testbild (zum Einrichten des Bildschirms)</option></select></div>
+      <div class="field"><label for="scView">Ansicht</label>
+        <select id="scView"><option value="auto">Countdown, freie Plätze, Danke-Text</option><option value="zeit">Große T−/T+-Uhr (immer mit Vorzeichen)</option></select></div>
       <div class="field"><label for="scHeading">Überschrift (leer = Eventname)</label><input id="scHeading" maxlength="80"></div>
       <div class="field"><label for="scBefore">Text vor dem Event</label><input id="scBefore" maxlength="120" placeholder="z. B. Einlass ab 17:30 Uhr"></div>
       <div class="field"><label for="scDuring">Überschrift während des Events</label><input id="scDuring" maxlength="60" placeholder="Heute bei uns"></div>
@@ -117,6 +119,7 @@
     $('scTitleH').textContent = s ? 'Anzeige bearbeiten' : 'Neue Anzeige';
     $('scName').value = s ? s.name : '';
     $('scMode').value = s ? s.mode : 'auto';
+    $('scView').value = c.view === 'zeit' ? 'zeit' : 'auto';
     $('scHeading').value = c.title || '';
     $('scBefore').value = c.before_text || '';
     $('scDuring').value = c.during_text || '';
@@ -136,6 +139,7 @@
     const h = parseFloat($('scHours').value);
     if (!(h >= 0.5 && h <= 48)) return SV.toast('Die Dauer muss zwischen 0,5 und 48 Stunden liegen.', 'bad');
     const config = { show_free: $('scFree').checked, show_inside: $('scInside').checked, during_s: Math.round(h * 3600) };
+    config.view = $('scView').value;
     [['title', 'scHeading'], ['before_text', 'scBefore'], ['during_text', 'scDuring'], ['after_text', 'scAfter']].forEach((p) => { const v = $(p[1]).value.trim(); if (v) config[p[0]] = v; });
     const row = { name: name, mode: $('scMode').value, active: $('scActive').checked, config: config };
     await SV.busy($('scOk'), async () => {

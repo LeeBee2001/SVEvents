@@ -34,6 +34,7 @@
       <div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div>
       <div class="field"><button class="btn secondary" type="button" id="fsOn">Vollbild</button></div>
       <div class="field"><button class="btn secondary" type="button" id="sndBtn" aria-pressed="true">Ton: an</button></div>
+      <div class="field"><button class="btn secondary" type="button" id="devBtn">Gerät: –</button></div>
     </div>
     <div class="figures" id="figures" style="margin-bottom:22px"></div>
 
@@ -93,6 +94,17 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<dialog id="devDlg">
+  <form class="dlg" id="devForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 style="margin:0 0 12px">Name dieses Geräts</h3>
+      <div class="field"><label for="devName">Name (steht im Scan-Protokoll)</label><input id="devName" maxlength="40" placeholder="z. B. Eingang Nord"></div>
+      <div class="hint">Praktisch, wenn mehrere Handys gleichzeitig scannen. Der Name wird nur auf diesem Gerät gespeichert.</div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="devCancel">Abbrechen</button><button class="btn" type="submit">Speichern</button></div>
+  </form>
+</dialog>
+
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
@@ -163,6 +175,20 @@
   $('sndBtn2').addEventListener('click', toggleSound);
   showSound();
 
+  // ---------- Gerätename (pro Handy/Tablet, nur lokal gespeichert) ----------
+  let device = '';
+  try { device = localStorage.getItem('sv_device') || ''; } catch (e) { /* egal */ }
+  function showDevice() { $('devBtn').textContent = 'Gerät: ' + (device || 'ohne Namen'); }
+  showDevice();
+  $('devBtn').addEventListener('click', () => { $('devName').value = device; $('devDlg').showModal(); });
+  $('devCancel').addEventListener('click', () => $('devDlg').close());
+  $('devForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    device = $('devName').value.trim().slice(0, 40);
+    try { localStorage.setItem('sv_device', device); } catch (err) { /* egal */ }
+    showDevice(); $('devDlg').close();
+  });
+
   let scanCount = 0, lastScanAt = 0;
   function ago() {
     if (!lastScanAt) return '';
@@ -199,7 +225,7 @@
     if (token === last.token && Date.now() - last.at < 2500) return;   // derselbe Code direkt nochmal
     ctxAudio();
     working = true;
-    const r = await sb.rpc('scan_ticket', { p_token: token, p_direction: direction(), p_event_id: $('eventSel').value });
+    const r = await sb.rpc('scan_ticket', { p_token: token, p_direction: direction(), p_event_id: $('eventSel').value, p_device: device || null });
     working = false;
     last = { token: token, at: Date.now() };
     if (r.error) verdict({ result: 'error', message: SV.errText(r.error) });
@@ -243,7 +269,7 @@
     const dir = b.dataset.dir;
     if (!g || !confirm(g.guest_name + (dir === 'in' ? ' von Hand einlassen?' : ' von Hand als draußen eintragen?'))) return;
     await SV.busy(b, async () => {
-      const r = await sb.rpc('manual_scan', { p_ticket_id: g.ticket_id, p_direction: dir, p_event_id: $('eventSel').value });
+      const r = await sb.rpc('manual_scan', { p_ticket_id: g.ticket_id, p_direction: dir, p_event_id: $('eventSel').value, p_device: device || null });
       if (r.error) SV.toast(SV.errText(r.error), 'bad');
       else { verdict(r.data); SV.toast(r.data.message || 'Eingetragen', r.data.result === 'ok' ? undefined : 'bad'); }
       loadStats(); loadGuests();

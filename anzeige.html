@@ -131,6 +131,16 @@
     const big = $('big');
     big.classList.remove('small');
     const freeText = free === 0 ? 'Ausverkauft' : free === 1 ? 'Noch 1 Platz frei' : 'Noch ' + free + ' Plätze frei';
+    if (cfg.view === 'zeit' && t0 != null) {
+      // Große T−/T+-Uhr: immer mit Vorzeichen, vor und nach dem Event
+      const rel = nowD.getTime() - t0;
+      big.textContent = (rel < 0 ? 'T − ' : 'T + ') + dur(Math.abs(rel));
+      if (big.textContent.length > 12) big.classList.add('small');
+      $('label').textContent = rel < 0 ? 'Bis Beginn' : 'Seit Beginn';
+      $('sub').textContent = [rel < 0 ? cfg.before_text : '', showFree ? freeText : ''].filter(Boolean).join(' · ');
+      $('foot').textContent = '';
+      return;
+    }
     if (t0 == null) {
       $('label').textContent = ''; big.textContent = free != null && showFree ? String(free) : '–'; $('sub').textContent = showFree ? 'Plätze frei' : '';
     } else {
