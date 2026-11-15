@@ -178,7 +178,7 @@
   async function loadRecent() {
     const id = $('eventSel').value;
     let q = sb.from('tickets')
-      .select('id, token, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, ticket_types(name)')
+      .select('id, token, code, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, ticket_types(name)')
       .eq('event_id', id).order('created_at', { ascending: false }).limit(20);
     if (!isAdmin) q = q.eq('sold_by', me.id);
     const r = await q;
@@ -232,9 +232,9 @@
       const ev = currentEvent();
       lastName = t.guest_name;
       lastQr = SV.showTicket($('ticketBox'), {
-        event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token
+        event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token, code: t.code
       });
-      lastTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token };
+      lastTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: ty ? ty.name : '', token: t.token, code: t.code };
       lastTicketId = t.id;
       mailTo = t.guest_email || '';
       $('mailStatus').hidden = true;
@@ -339,7 +339,7 @@
     if (!b) return;
     const t = recentRows[parseInt(b.dataset.qr, 10)];
     const ev = currentEvent();
-    dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+    dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token, code: t.code };
     SV.showTicket($('qrDlgBox'), dlgTicket);
     $('qrDlg').showModal();
   });

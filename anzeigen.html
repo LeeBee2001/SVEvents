@@ -37,7 +37,11 @@
       <div class="field"><label for="scMode">Darstellung</label>
         <select id="scMode"><option value="auto">Normal (Countdown, freie Plätze, Danke)</option><option value="test">Testbild (zum Einrichten des Bildschirms)</option></select></div>
       <div class="field"><label for="scView">Ansicht</label>
-        <select id="scView"><option value="auto">Countdown, freie Plätze, Danke-Text</option><option value="zeit">Große T−/T+-Uhr (immer mit Vorzeichen)</option></select></div>
+        <select id="scView"><option value="auto">Countdown, freie Plätze, Danke-Text</option><option value="zeit">Große T−/T+-Uhr (immer mit Vorzeichen)</option><option value="uhr">Nur Uhr: Vollbild, schwarz, ohne alles andere</option><option value="umfrage">Umfrage: QR-Code zum Abstimmen und Ergebnis</option></select>
+        <div class="hint" id="scViewHint" hidden>Zeigt nur die Uhr. Überschrift, Texte und Zahlen werden bei dieser Ansicht nicht verwendet. Gelb in den letzten 5 Minuten, grün ab T0.</div></div>
+      <div class="field" id="scPollWrap" hidden><label for="scPoll">Welche Umfrage?</label><select id="scPoll"></select>
+        <div class="hint">Zeigt den QR-Code zum Abstimmen. Sobald das Ergebnis sichtbar sein darf (live oder nach Ende), erscheinen die Balken. Umfragen legst du unter „Umfragen“ an.</div></div>
+      <div class="field" id="scTcWrap" hidden><label class="check"><input id="scTclock" type="checkbox"> Im Testbild die T−/T+-Uhr groß in der Mitte zeigen</label></div>
       <div class="field"><label for="scHeading">Überschrift (leer = Eventname)</label><input id="scHeading" maxlength="80"></div>
       <div class="field"><label for="scBefore">Text vor dem Event</label><input id="scBefore" maxlength="120" placeholder="z. B. Einlass ab 17:30 Uhr"></div>
       <div class="field"><label for="scDuring">Überschrift während des Events</label><input id="scDuring" maxlength="60" placeholder="Heute bei uns"></div>
@@ -63,7 +67,7 @@
   if (!ctx) return;
   const sb = ctx.sb;
   const { esc, $ } = SV;
-  let events = [], cur = null, screens = [], editing = null;
+  let events = [], cur = null, screens = [], polls = [], editing = null;
 
   const linkOf = (s, extra) => new URL('anzeige.html?t=' + s.token + (extra || ''), location.href).href;
 
@@ -72,6 +76,9 @@
     const r = await sb.from('public_screens').select('*').eq('event_id', ev.id).order('created_at');
     if (r.error) throw r.error;
     if (cur !== ev) return;
+    const pr = await sb.from('polls').select('id, title, token, status').eq('event_id', ev.id).order('created_at');
+    if (cur !== ev) return;
+    polls = pr.error ? [] : pr.data;
     screens = r.data;
     render();
   }
@@ -80,7 +87,7 @@
     if (!screens.length) { $('list').innerHTML = '<div class="empty"><b>Noch keine Anzeige</b>Lege eine an und öffne den Link auf dem Bildschirm.</div>'; return; }
     $('list').innerHTML = screens.map((s) =>
       '<div class="station-card" data-id="' + s.id + '"><div class="section-head" style="margin-bottom:6px"><div><h3 style="margin:0">' + esc(s.name) + ' ' +
-      (s.active ? '<span class="badge ok">an</span>' : '<span class="badge bad">aus</span>') + (s.mode === 'test' ? ' <span class="badge warn">Testbild</span>' : '') + '</h3>' +
+      (s.active ? '<span class="badge ok">an</span>' : '<span class="badge bad">aus</span>') + (s.mode === 'test' ? ' <span class="badge warn">Testbild</span>' : '') + ((s.config || {}).view === 'umfrage' ? ' <span class="badge">Umfrage</span>' : (s.config || {}).view === 'uhr' ? ' <span class="badge">Nur Uhr</span>' : (s.config || {}).view === 'zeit' ? ' <span class="badge">T-Uhr</span>' : '') + '</h3>' +
       '<div class="muted small" style="word-break:break-all">' + esc(linkOf(s)) + '</div></div>' +
       '<div class="actions"><a class="btn secondary sm" href="' + esc(linkOf(s)) + '" target="_blank" rel="noopener">Öffnen</a>' +
       '<a class="btn secondary sm" href="' + esc(linkOf(s, '&test=1')) + '" target="_blank" rel="noopener">Testbild</a>' +
@@ -119,7 +126,11 @@
     $('scTitleH').textContent = s ? 'Anzeige bearbeiten' : 'Neue Anzeige';
     $('scName').value = s ? s.name : '';
     $('scMode').value = s ? s.mode : 'auto';
-    $('scView').value = c.view === 'zeit' ? 'zeit' : 'auto';
+    $('scView').value = c.view === 'zeit' ? 'zeit' : c.view === 'uhr' ? 'uhr' : c.view === 'umfrage' ? 'umfrage' : 'auto';
+    $('scPoll').innerHTML = polls.length ? polls.map((p) => '<option value="' + p.token + '">' + esc(p.title) + '</option>').join('') : '<option value="">Noch keine Umfrage angelegt</option>';
+    if (c.poll_token) $('scPoll').value = c.poll_token;
+    $('scTclock').checked = !!c.test_clock;
+    syncDlg();
     $('scHeading').value = c.title || '';
     $('scBefore').value = c.before_text || '';
     $('scDuring').value = c.during_text || '';
@@ -130,6 +141,13 @@
     $('scActive').checked = s ? s.active : true;
     $('scDlg').showModal();
   }
+  function syncDlg() {
+    $('scViewHint').hidden = $('scView').value !== 'uhr';
+    $('scTcWrap').hidden = $('scMode').value !== 'test';
+    $('scPollWrap').hidden = $('scView').value !== 'umfrage';
+  }
+  $('scView').addEventListener('change', syncDlg);
+  $('scMode').addEventListener('change', syncDlg);
   $('newScreen').addEventListener('click', () => openScreen(null));
   $('scCancel').addEventListener('click', () => $('scDlg').close());
   $('scForm').addEventListener('submit', async (e) => {
@@ -140,6 +158,11 @@
     if (!(h >= 0.5 && h <= 48)) return SV.toast('Die Dauer muss zwischen 0,5 und 48 Stunden liegen.', 'bad');
     const config = { show_free: $('scFree').checked, show_inside: $('scInside').checked, during_s: Math.round(h * 3600) };
     config.view = $('scView').value;
+    if (config.view === 'umfrage') {
+      if (!$('scPoll').value) return SV.toast('Bitte zuerst unter „Umfragen“ eine Umfrage anlegen und hier auswählen.', 'bad');
+      config.poll_token = $('scPoll').value;
+    }
+    if ($('scTclock').checked) config.test_clock = true;
     [['title', 'scHeading'], ['before_text', 'scBefore'], ['during_text', 'scDuring'], ['after_text', 'scAfter']].forEach((p) => { const v = $(p[1]).value.trim(); if (v) config[p[0]] = v; });
     const row = { name: name, mode: $('scMode').value, active: $('scActive').checked, config: config };
     await SV.busy($('scOk'), async () => {

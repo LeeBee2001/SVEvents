@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Umfragen – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+<style>
+  .poll { margin-bottom: 16px; }
+  .poll-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .poll-head h3 { margin: 0; font-size: 18px; }
+  .poll-acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+  .pbar { margin: 9px 0; }
+  .pbar .row { display: flex; justify-content: space-between; gap: 10px; font-weight: 600; }
+  .pbar .track { height: 12px; background: var(--line, #dcdfe5); border-radius: 7px; overflow: hidden; margin-top: 4px; }
+  .pbar .fill { height: 100%; background: var(--accent, #1f3fbf); border-radius: 7px; transition: width .4s; }
+  .pbar.win .fill { background: #16a34a; }
+  .oprow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; margin-bottom: 8px; align-items: start; }
+  .oprow .full { grid-column: 1 / -1; }
+  .oprow .ctl { display: flex; gap: 2px; }
+  #qrBox { display: grid; place-items: center; padding: 12px; background: #fff; border-radius: 12px; margin-bottom: 12px; }
+  #linkTxt { width: 100%; font-size: 13px; }
+</style>
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Umfragen</h1>
+      <p class="muted">Abstimmungen wie „Ballkönig/in“. Per QR-Code starten, Ergebnis live auf dem Bildschirm zeigen.</p>
+    </div>
+    <div><button class="btn" type="button" id="newPoll">Neue Umfrage</button></div>
+  </div>
+  <div id="empty" class="empty" hidden><b>Noch kein Event</b>Lege unter „Events“ das erste Event an.</div>
+  <div id="eventPart" hidden>
+    <div class="toolbar"><div class="field"><label for="eventSel">Event</label><select id="eventSel"></select></div></div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<dialog id="pDlg">
+  <form class="dlg" id="pForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="pDlgTitle" style="margin:0 0 12px">Umfrage</h3>
+      <div class="field"><label for="pTitle">Frage / Titel</label><input id="pTitle" maxlength="120" placeholder="z. B. Wer wird Ballkönig/in?"></div>
+      <div class="field"><label for="pDesc">Hinweis (optional)</label><input id="pDesc" maxlength="300" placeholder="z. B. Pro Ticket eine Stimme"></div>
+      <div class="grid-2">
+        <div class="field"><label for="pKind">Art</label>
+          <select id="pKind"><option value="single">Einfachwahl (eine Option)</option><option value="multi">Mehrfachwahl (bis zu N)</option><option value="rating">Bewertung (Sterne 1–5)</option></select></div>
+        <div class="field" id="pMaxWrap"><label for="pMax">Höchstens wählbar</label><input id="pMax" type="number" min="2" max="20" value="2" inputmode="numeric"></div>
+      </div>
+      <div class="field"><label for="pElig">Wer darf abstimmen?</label>
+        <select id="pElig"><option value="ticket">Gäste mit Ticket (Code vom Ticket, eine Stimme pro Ticket)</option><option value="device">Jeder mit dem Link (eine Stimme pro Gerät)</option></select>
+        <div class="hint" id="pEligHint"></div></div>
+      <label class="check" id="pCheckWrap"><input id="pCheck" type="checkbox"> Nur Gäste, die schon eingelassen wurden</label>
+      <div class="field" style="margin-top:12px"><label for="pRes">Ergebnis sichtbar</label>
+        <select id="pRes"><option value="after_close">Erst nach Ende der Abstimmung</option><option value="live">Live während der Abstimmung</option></select></div>
+      <div class="field"><span class="label">Optionen (mindestens 2)</span><div id="pOpts"></div>
+        <button class="btn secondary" type="button" id="pAddOpt">Option hinzufügen</button>
+        <div class="hint">Optional ein Foto als https-Link (z. B. Bild aus deinem Cloud-Speicher). Die Reihenfolge wird den Gästen zufällig gemischt.</div></div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="pCancel">Abbrechen</button><button class="btn" type="submit" id="pOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<dialog id="qDlg">
+  <div class="dlg">
+    <div class="dlg-body">
+      <h3 id="qTitle" style="margin:0 0 12px">QR-Code</h3>
+      <div id="qrBox"></div>
+      <input id="linkTxt" readonly>
+      <div class="hint" style="margin-top:8px">Zum Anzeigen auf dem Bildschirm: unter „Anzeigen“ einen Screen mit der Ansicht „Umfrage“ anlegen.</div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="qCopy">Link kopieren</button><button class="btn" type="button" id="qClose">Schließen</button></div>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'umfragen', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { esc, $ } = SV;
+  let events = [], cur = null, polls = [], opts = {}, voters = {}, editing = null, timer = null;
+
+  const KIND = { single: 'Einfachwahl', multi: 'Mehrfachwahl', rating: 'Bewertung' };
+  const STATUS = { draft: ['warn', 'Entwurf'], open: ['ok', 'läuft'], closed: ['bad', 'beendet'] };
+  const linkOf = (p) => new URL('abstimmen.html?p=' + p.token, location.href).href;
+
+  async function load(quiet) {
+    const ev = cur;
+    const [a, b, c] = await Promise.all([
+      sb.from('polls').select('*').eq('event_id', ev.id).order('created_at'),
+      sb.from('poll_options').select('*').order('sort'),
+      sb.rpc('poll_voter_counts', { p_event: ev.id })
+    ]);
+    [a, b, c].forEach((r) => { if (r.error) throw r.error; });
+    if (cur !== ev) return;
+    polls = a.data; opts = {}; voters = {};
+    const ids = new Set(polls.map((p) => p.id));
+    b.data.forEach((o) => { if (ids.has(o.poll_id)) (opts[o.poll_id] = opts[o.poll_id] || []).push(o); });
+    c.data.forEach((v) => { voters[v.poll_id] = Number(v.voters); });
+    render();
+    clearTimeout(timer);
+    if (polls.some((p) => p.status === 'open')) timer = setTimeout(() => load(true).catch(() => {}), 5000);
+  }
+
+  function bars(p) {
+    const list = (opts[p.id] || []).slice();
+    if (!list.length) return '';
+    const n = voters[p.id] || 0;
+    if (p.kind === 'rating') {
+      const avg = (o) => (o.rating_n ? o.rating_sum / o.rating_n : 0);
+      list.sort((x, y) => avg(y) - avg(x));
+      const top = avg(list[0]);
+      return list.map((o) => '<div class="pbar' + (top > 0 && avg(o) === top ? ' win' : '') + '"><div class="row"><span>' + esc(o.label) + '</span><span>' + (o.rating_n ? '★ ' + avg(o).toFixed(1).replace('.', ',') + ' <span class="muted">(' + o.rating_n + ')</span>' : '–') + '</span></div><div class="track"><div class="fill" style="width:' + avg(o) / 5 * 100 + '%"></div></div></div>').join('');
+    }
+    list.sort((x, y) => y.votes - x.votes);
+    const top = list[0].votes, base = Math.max(1, n);
+    return list.map((o) => '<div class="pbar' + (top > 0 && o.votes === top ? ' win' : '') + '"><div class="row"><span>' + esc(o.label) + '</span><span>' + o.votes + ' <span class="muted">(' + Math.round(o.votes / base * 100) + ' %)</span></span></div><div class="track"><div class="fill" style="width:' + o.votes / base * 100 + '%"></div></div></div>').join('');
+  }
+
+  function render() {
+    if (!polls.length) { $('list').innerHTML = '<div class="empty"><b>Noch keine Umfrage</b>Lege z. B. „Ballkönig/in“ an.</div>'; return; }
+    $('list').innerHTML = polls.map((p) => {
+      const s = STATUS[p.status], n = voters[p.id] || 0, o = opts[p.id] || [];
+      const who = p.eligibility === 'ticket' ? 'Ticket-Code' + (p.require_checkin ? ', nur eingelassene Gäste' : '') : 'ein Gerät = eine Stimme';
+      const res = p.results_mode === 'live' ? 'Ergebnis live' : 'Ergebnis nach Ende';
+      return '<section class="card poll" data-id="' + p.id + '"><div class="poll-head"><h3>' + esc(p.title) + '</h3><span class="badge ' + s[0] + '">' + s[1] + '</span></div>' +
+        '<div class="muted small">' + KIND[p.kind] + (p.kind === 'multi' ? ' (bis ' + p.max_choices + ')' : '') + ' · ' + esc(who) + ' · ' + res + ' · <b>' + n + '</b> ' + (n === 1 ? 'Stimme' : 'Stimmen') + '</div>' +
+        (p.status === 'draft' ? '<div style="margin-top:8px">' + (o.length ? o.map((x) => '<span class="badge accent" style="margin:0 4px 4px 0">' + esc(x.label) + '</span>').join('') : '<span class="muted small">Noch keine Optionen.</span>') + '</div>' : '<div style="margin-top:8px">' + bars(p) + '</div>') +
+        '<div class="poll-acts">' +
+        (p.status === 'draft' ? '<button class="btn" type="button" data-act="open">Starten</button><button class="btn secondary" type="button" data-act="edit">Bearbeiten</button>' : '') +
+        (p.status === 'open' ? '<button class="btn" type="button" data-act="close">Beenden</button>' : '') +
+        (p.status === 'closed' ? '<button class="btn secondary" type="button" data-act="open">Wieder öffnen</button>' : '') +
+        '<button class="btn secondary" type="button" data-act="qr">QR-Code / Link</button>' +
+        (p.status !== 'draft' ? '<button class="btn link" type="button" data-act="reset">Stimmen löschen</button>' : '') +
+        '<button class="btn link" type="button" data-act="del">Löschen</button></div></section>';
+    }).join('');
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b || !b.closest('.poll')) return;
+    const p = polls.find((x) => x.id === b.closest('.poll').dataset.id);
+    if (!p) return;
+    try {
+      const a = b.dataset.act;
+      if (a === 'edit') openPoll(p);
+      else if (a === 'qr') openQr(p);
+      else if (a === 'open' || a === 'close') {
+        if (a === 'close' && !await SV.confirmBox('Nach dem Beenden kann niemand mehr abstimmen' + (p.results_mode === 'after_close' ? ' und das Ergebnis wird sichtbar.' : '.'), { title: 'Abstimmung beenden?', ok: 'Beenden' })) return;
+        const r = await sb.rpc('poll_set_status', { p_id: p.id, p_status: a === 'open' ? 'open' : 'closed' });
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (a === 'reset') {
+        if (!await SV.confirmBox('Alle abgegebenen Stimmen werden gelöscht und die Umfrage wird wieder zum Entwurf. Das lässt sich nicht rückgängig machen.', { title: 'Stimmen löschen?', ok: 'Löschen', danger: true })) return;
+        const r = await sb.rpc('poll_reset_votes', { p_id: p.id });
+        if (r.error) return SV.fail(r.error);
+        await load();
+      } else if (a === 'del') {
+        if (!await SV.confirmBox('„' + p.title + '“ wird mit allen Stimmen gelöscht.', { title: 'Umfrage löschen?', ok: 'Löschen', danger: true })) return;
+        const r = await sb.from('polls').delete().eq('id', p.id);
+        if (r.error) return SV.fail(r.error);
+        await load();
+      }
+    } catch (err) { SV.fail(err); }
+  });
+
+  // ---------- QR ----------
+  function openQr(p) {
+    $('qTitle').textContent = p.title;
+    $('qrBox').innerHTML = '';
+    const url = linkOf(p);
+    try { new QRCode($('qrBox'), { text: url, width: 260, height: 260, correctLevel: QRCode.CorrectLevel.M }); } catch (e) { $('qrBox').textContent = 'QR-Code nicht verfügbar'; }
+    $('linkTxt').value = url;
+    $('qDlg').showModal();
+  }
+  $('qClose').addEventListener('click', () => $('qDlg').close());
+  $('qCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('linkTxt').value); SV.toast('Link kopiert'); }
+    catch (e) { $('linkTxt').select(); SV.toast('Bitte den markierten Link kopieren', 'warn'); }
+  });
+
+  // ---------- Bearbeiten ----------
+  function optRow(o) {
+    const d = document.createElement('div');
+    d.className = 'oprow';
+    d.innerHTML = '<input class="o-label" maxlength="80" placeholder="Name der Option" value="' + esc(o ? o.label : '') + '">' +
+      '<input class="o-note" maxlength="120" placeholder="Zusatz (optional)" value="' + esc(o && o.note ? o.note : '') + '">' +
+      '<div class="ctl"><button class="btn link" type="button" data-o="up" title="Nach oben">↑</button><button class="btn link" type="button" data-o="down" title="Nach unten">↓</button><button class="btn link" type="button" data-o="del" title="Entfernen">✕</button></div>' +
+      '<input class="o-img full" maxlength="500" placeholder="Foto-Link (https://…, optional)" value="' + esc(o && o.image_url ? o.image_url : '') + '">';
+    return d;
+  }
+  $('pOpts').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-o]'); if (!b) return;
+    const row = b.closest('.oprow');
+    if (b.dataset.o === 'del') row.remove();
+    else if (b.dataset.o === 'up' && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+    else if (b.dataset.o === 'down' && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+  });
+  $('pAddOpt').addEventListener('click', () => { const r = optRow(null); $('pOpts').appendChild(r); r.querySelector('.o-label').focus(); });
+
+  function syncForm() {
+    $('pMaxWrap').hidden = $('pKind').value !== 'multi';
+    const t = $('pElig').value === 'ticket';
+    $('pCheckWrap').hidden = !t;
+    $('pEligHint').textContent = t
+      ? 'Jedes Ticket hat einen Code (steht auf dem Ticket und in der Ticket-Mail). Pro Ticket nur eine Stimme, auch bei Eltern mit mehreren Tickets.'
+      : 'Einfacher, aber weniger streng: Wer ein zweites Gerät oder den privaten Modus nutzt, kann nochmal abstimmen. Gut für Stimmungsbilder.';
+  }
+  $('pKind').addEventListener('change', syncForm);
+  $('pElig').addEventListener('change', syncForm);
+
+  function openPoll(p) {
+    editing = p || null;
+    $('pDlgTitle').textContent = p ? 'Umfrage bearbeiten' : 'Neue Umfrage';
+    $('pTitle').value = p ? p.title : '';
+    $('pDesc').value = p ? (p.description || '') : '';
+    $('pKind').value = p ? p.kind : 'single';
+    $('pMax').value = p ? Math.max(2, p.max_choices) : 2;
+    $('pElig').value = p ? p.eligibility : 'ticket';
+    $('pCheck').checked = p ? p.require_checkin : false;
+    $('pRes').value = p ? p.results_mode : 'after_close';
+    $('pOpts').innerHTML = '';
+    const list = p ? (opts[p.id] || []) : [null, null, null];
+    list.forEach((o) => $('pOpts').appendChild(optRow(o)));
+    syncForm();
+    $('pDlg').showModal();
+  }
+  $('newPoll').addEventListener('click', () => openPoll(null));
+  $('pCancel').addEventListener('click', () => $('pDlg').close());
+
+  $('pForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = $('pTitle').value.trim();
+    if (!title) return SV.toast('Bitte gib eine Frage oder einen Titel ein.', 'bad');
+    const rows = Array.from($('pOpts').querySelectorAll('.oprow')).map((r) => ({
+      label: r.querySelector('.o-label').value.trim(), note: r.querySelector('.o-note').value.trim() || null, image_url: r.querySelector('.o-img').value.trim() || null
+    })).filter((r) => r.label);
+    if (rows.length < 2) return SV.toast('Bitte lege mindestens zwei Optionen an.', 'bad');
+    if (rows.some((r) => r.image_url && !/^https:\/\//i.test(r.image_url))) return SV.toast('Foto-Links müssen mit https:// beginnen.', 'bad');
+    const kind = $('pKind').value;
+    const max = kind === 'multi' ? Math.min(Math.max(parseInt($('pMax').value, 10) || 2, 2), Math.min(20, rows.length)) : 1;
+    const row = { title: title, description: $('pDesc').value.trim() || null, kind: kind, max_choices: max, eligibility: $('pElig').value,
+      require_checkin: $('pElig').value === 'ticket' && $('pCheck').checked, results_mode: $('pRes').value };
+    await SV.busy($('pOk'), async () => {
+      let id;
+      if (editing) {
+        const r = await sb.from('polls').update(row).eq('id', editing.id);
+        if (r.error) return SV.fail(r.error);
+        id = editing.id;
+        const d = await sb.from('poll_options').delete().eq('poll_id', id);
+        if (d.error) return SV.fail(d.error);
+      } else {
+        const r = await sb.from('polls').insert(Object.assign({ event_id: cur.id }, row)).select('id').single();
+        if (r.error) return SV.fail(r.error);
+        id = r.data.id;
+      }
+      const ins = await sb.from('poll_options').insert(rows.map((o, i) => Object.assign({ poll_id: id, sort: i + 1 }, o)));
+      if (ins.error) return SV.fail(ins.error);
+      $('pDlg').close();
+      await load();
+    });
+  });
+
+  function pick() { cur = events.find((x) => x.id === $('eventSel').value) || null; return cur ? load().catch(SV.fail) : Promise.resolve(); }
+  try {
+    events = await SV.loadEvents();
+    $('empty').hidden = events.length > 0;
+    $('eventPart').hidden = events.length === 0;
+    $('newPoll').hidden = events.length === 0;
+    if (events.length) { SV.fillEventSelect($('eventSel'), events); $('eventSel').addEventListener('change', pick); await pick(); }
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>

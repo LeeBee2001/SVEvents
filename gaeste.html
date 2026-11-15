@@ -87,7 +87,7 @@
   async function load() {
     const id = $('eventSel').value;
     const r = await sb.from('tickets')
-      .select('id, token, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, sold_by, ticket_types(name, counts_to_capacity)')
+      .select('id, token, code, guest_name, guest_class, guest_email, mail_sent_at, status, created_at, sold_by, ticket_types(name, counts_to_capacity)')
       .eq('event_id', id).order('created_at', { ascending: false });
     if (r.error) throw r.error;
     rows = r.data;
@@ -155,7 +155,7 @@
 
   function ticketData(t) {
     const ev = currentEvent();
-    return { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+    return { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token, code: t.code };
   }
   async function mailTicket(t, btn) {
     await SV.busy(btn, async () => {
@@ -190,7 +190,7 @@
     try {
       if (b.dataset.act === 'qr') {
         const ev = currentEvent();
-        dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token };
+        dlgTicket = { event: ev ? ev.name : '', name: t.guest_name, klass: t.guest_class, type: t.ticket_types ? t.ticket_types.name : '', token: t.token, code: t.code };
         SV.showTicket($('qrDlgBox'), dlgTicket);
         $('qrDlg').showModal();
       }

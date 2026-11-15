@@ -55,6 +55,7 @@
     { id: 'ablauf', href: 'ablauf.html', label: 'Ablauf & Aufgaben', short: 'Ablauf', need: 'admin', group: 'Planung', icon: 'M5 3h14v2H5V3zm0 8h14v2H5v-2zm0 8h14v2H5v-2zM3 4a1 1 0 1 1 0 .1V4zm0 8a1 1 0 1 1 0 .1V12zm0 8a1 1 0 1 1 0 .1V20z' },
     { id: 'anzeigen', href: 'anzeigen.html', label: 'Anzeigen', need: 'admin', group: 'Planung', icon: 'M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6H4z' },
     { id: 'rabatt', href: 'rabatt.html', label: 'Rabattcodes', need: 'admin', group: 'Planung', icon: 'M21.4 11.6l-9-9A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 .6 1.4l9 9a2 2 0 0 0 2.8 0l7-7a2 2 0 0 0 0-2.8zM6.5 8A1.5 1.5 0 1 1 6.5 5a1.5 1.5 0 0 1 0 3z' },
+    { id: 'umfragen', href: 'umfragen.html', label: 'Umfragen', need: 'admin', group: 'Planung', icon: 'M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zm5.6 8H19v6h-2.8v-6z' },
     { id: 'aktionen', href: 'aktionen.html', label: 'Aktionen', need: 'campaigns', group: 'Planung', icon: 'M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8L12 2z' },
     { id: 'gaeste', href: 'gaeste.html', label: 'Gästeliste', need: 'admin', group: 'Gäste', icon: 'M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM4 21a8 8 0 0 1 16 0H4z' },
     { id: 'mailvorlage', href: 'mailvorlage.html', label: 'Mail-Vorlage', need: 'admin', group: 'Gäste', icon: 'M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v.5l8 5 8-5V7H4z' },
@@ -383,6 +384,12 @@
       else { bf = mix('#ffffff', th.c1, 0.14); bt = lum(th.c1) > 0.5 ? '#15171c' : th.c1; }
       g.fillStyle = bf; g.fill();
       g.fillStyle = bt; g.textBaseline = 'middle'; g.fillText(label, left + 22, by + bh / 2 + 1); g.textBaseline = 'alphabetic';
+      // Abstimmungs-Code neben der Ticketart (wenn Platz ist)
+      if (t.code) {
+        g.font = '600 26px ui-monospace, Menlo, Consolas, monospace';
+        const ct = 'Code ' + t.code, cx0 = left + bw + 22;
+        if (cx0 + g.measureText(ct).width < sx - 24) { g.fillStyle = sub; g.textBaseline = 'middle'; g.fillText(ct, cx0, by + bh / 2 + 1); g.textBaseline = 'alphabetic'; }
+      }
     }
 
     // QR-Code rechts (immer auf weißer Kachel, damit er scannbar bleibt)
