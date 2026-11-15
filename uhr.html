@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Uhr – SVEvents</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root { --fg: #ffffff; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); overflow: hidden;
+    font-family: -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-user-select: none; user-select: none; }
+  body.idle { cursor: none; }
+  #content { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #big { font-size: min(13.5vw, 30vh); font-weight: 700; line-height: 1; letter-spacing: -.02em; white-space: nowrap;
+    font-variant-numeric: tabular-nums; text-align: center; }
+  #big.small { font-size: min(8.5vw, 19vh); }
+  #big.warn { color: #fbbf24; }
+  #big.after { color: #4ade80; }
+  #sub { position: fixed; left: 0; right: 0; bottom: max(2.4vh, env(safe-area-inset-bottom)); text-align: center;
+    font-size: min(2.6vw, 3.8vh); opacity: .5; font-variant-numeric: tabular-nums; }
+  body.clean #sub { display: none; }
+  #dot { position: fixed; right: 1.6vmin; top: 1.6vmin; width: 1.4vmin; height: 1.4vmin; border-radius: 50%; background: #f87171; display: none; }
+  #dot.on { display: block; }
+  #ctl { position: fixed; left: 0; right: 0; top: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+    padding: calc(12px + env(safe-area-inset-top)) 12px 12px; background: rgba(20,20,20,.92); transform: translateY(-110%); transition: transform .18s ease; z-index: 5; }
+  #ctl.show { transform: none; }
+  #ctl button, #ctl select, #ctl a { font: inherit; font-size: 16px; color: #fff; background: #2a2a2a; border: 1px solid #444; border-radius: 10px;
+    padding: 10px 14px; text-decoration: none; min-height: 44px; }
+  #ctl button[aria-pressed="true"] { background: #3b3b3b; border-color: #888; }
+  #msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 8vw;
+    font-size: min(4vw, 6vh); line-height: 1.35; opacity: .85; }
+</style>
+</head>
+<body>
+<main id="content" hidden>
+  <div id="big" aria-live="off">–</div>
+  <div id="sub"></div>
+  <div id="dot" title="Keine Verbindung zum Server"></div>
+</main>
+<div id="msg"></div>
+<div id="ctl" role="toolbar" aria-label="Einstellungen">
+  <select id="eventSel" aria-label="Event"></select>
+  <button type="button" id="fsBtn">Vollbild</button>
+  <button type="button" id="cleanBtn" aria-pressed="false">Nur Uhr</button>
+  <a href="cockpit.html" id="backLink">Zurück</a>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  // Interne Seite: nur mit Login, ohne Menü (bare). Jeder Mitarbeiter mit mindestens einem Recht darf sie sehen.
+  const ctx = await SV.start({ page: 'uhr', need: 'any', bare: true });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const $ = (id) => document.getElementById(id);
+  const q = new URLSearchParams(location.search);
+
+  let events = [], cur = null, offset = 0, ok = true, lastText = '';
+  const KEY = 'sv_uhr';
+  const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } };
+  const save = (o) => { try { localStorage.setItem(KEY, JSON.stringify(Object.assign(load(), o))); } catch (e) { /* egal */ } };
+
+  // Zeit-Abgleich mit dem Server (die Uhr des Geräts darf falsch gehen)
+  async function sync() {
+    try {
+      const a = Date.now();
+      const r = await sb.rpc('server_now');
+      const b = Date.now();
+      if (r.error || !r.data) throw r.error || new Error('keine Zeit');
+      offset = new Date(r.data).getTime() - (a + b) / 2;
+      ok = true;
+    } catch (e) { ok = false; }
+  }
+  const nowMs = () => Date.now() + offset;
+  const p2 = (n) => String(n).padStart(2, '0');
+
+  function t0Of(ev) { const v = ev && (ev.t0 || ev.starts_at); return v ? new Date(v).getTime() : null; }
+
+  function render() {
+    $('dot').className = ok ? '' : 'on';
+    const big = $('big');
+    if (!cur) return;
+    const t0 = t0Of(cur);
+    const d = new Date(nowMs());
+    const clock = p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+    $('sub').textContent = cur.name + ' · ' + clock;
+    if (t0 == null) { if (lastText !== '–') { big.textContent = '–'; lastText = '–'; } $('sub').textContent = cur.name + ' · kein T0 gesetzt'; return; }
+    const rel = t0 - nowMs(); // > 0: noch davor
+    const text = SV.fmtT(rel);
+    if (text !== lastText) {
+      big.textContent = text; lastText = text;
+      big.classList.toggle('small', text.length > 12);
+    }
+    big.classList.toggle('warn', rel > 0 && rel <= 300000);   // letzte 5 Minuten: gelb
+    big.classList.toggle('after', rel <= 0);                  // ab T0: grün
+  }
+
+  // T0 kann sich ändern, deshalb das Event regelmäßig neu lesen
+  async function refreshEvent() {
+    if (!cur) return;
+    const r = await sb.from('events').select('id, name, t0, starts_at').eq('id', cur.id).maybeSingle();
+    if (!r.error && r.data) Object.assign(cur, r.data);
+  }
+
+  // ---------- Bedienung ----------
+  const fs = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+  };
+  let hideTimer = null, idleTimer = null;
+  const ctl = $('ctl');
+  function showCtl() { ctl.classList.add('show'); clearTimeout(hideTimer); hideTimer = setTimeout(() => ctl.classList.remove('show'), 5000); }
+  function setClean(on) { document.body.classList.toggle('clean', on); $('cleanBtn').setAttribute('aria-pressed', String(on)); save({ clean: on }); }
+
+  document.addEventListener('click', (e) => { if (e.target.closest('#ctl')) { showCtl(); return; } ctl.classList.contains('show') ? ctl.classList.remove('show') : showCtl(); });
+  $('fsBtn').addEventListener('click', fs);
+  $('cleanBtn').addEventListener('click', () => setClean(!document.body.classList.contains('clean')));
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'SELECT') return;
+    if (e.key === 'f' || e.key === 'F') fs();
+    else if (e.key === 'h' || e.key === 'H') setClean(!document.body.classList.contains('clean'));
+  });
+  // Mauszeiger im Vollbild nach 3 s ausblenden
+  document.addEventListener('mousemove', () => { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (document.fullscreenElement) document.body.classList.add('idle'); }, 3000); });
+
+  // Bildschirm anlassen (wenn der Browser es kann)
+  let lock = null;
+  async function keepAwake() { try { if (navigator.wakeLock && !document.hidden) lock = await navigator.wakeLock.request('screen'); } catch (e) { lock = null; } }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { keepAwake(); sync(); } });
+
+  // ---------- Start ----------
+  try {
+    events = await SV.loadEvents();
+    if (!events.length) { $('msg').style.display = 'flex'; $('msg').textContent = 'Es gibt noch kein Event.'; $('content').hidden = true; return; }
+    const saved = load();
+    const wanted = q.get('event') || saved.event;
+    cur = events.find((e) => e.id === wanted) || events[0];
+    $('eventSel').innerHTML = events.map((e) => '<option value="' + e.id + '">' + SV.esc(e.name) + '</option>').join('');
+    $('eventSel').value = cur.id;
+    $('eventSel').addEventListener('change', async () => { cur = events.find((e) => e.id === $('eventSel').value); save({ event: cur.id }); lastText = ''; render(); await refreshEvent(); lastText = ''; render(); });
+    $('backLink').href = SV.homeFor(ctx.me);
+    setClean(q.get('clean') === '1' || !!saved.clean);
+    $('cleanBtn').setAttribute('aria-pressed', String(document.body.classList.contains('clean')));
+  } catch (e) { SV.fail(e); return; }
+
+  await sync();
+  render();
+  setInterval(render, 200);
+  setInterval(sync, 60000);
+  setInterval(refreshEvent, 30000);
+  keepAwake();
+  // Kurzer Hinweis beim ersten Start: Tippen zeigt die Bedienung
+  setTimeout(showCtl, 400);
+})();
+</script>
+</body>
+</html>

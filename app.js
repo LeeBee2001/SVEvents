@@ -62,12 +62,21 @@
     { id: 'insights', href: 'insights.html', label: 'Insights', need: 'admin', group: 'Auswertung', icon: 'M4 20V10h4v10H4zm6 0V4h4v16h-4zm6 0v-7h4v7h-4z' },
     { id: 'protokoll', href: 'protokoll.html', label: 'Scan-Protokoll', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
     { id: 'drucken', href: 'drucken.html', label: 'Drucken / PDF', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
-    { id: 'benutzer', href: 'benutzer.html', label: 'Benutzer', need: 'admin', group: 'Verwaltung', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z' }
+    { id: 'benutzer', href: 'benutzer.html', label: 'Benutzer', need: 'admin', group: 'Verwaltung', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z' },
+    { id: 'uhr', href: 'uhr.html', label: 'Vollbild-Uhr', short: 'Uhr', need: 'any', group: 'Heute', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z' },
   ];
   const CAP_LABEL = { sell: 'Verkauf', scan: 'Einlass', campaigns: 'Aktionen', stations: 'Schicht' };
 
+  // need: 'admin' | Recht aus my_caps | 'any' (jeder Mitarbeiter mit mindestens einem Recht)
+  function hasNeed(me, need) {
+    if (me.role === 'admin') return true;
+    if (need === 'admin') return false;
+    if (!me.caps) return false;
+    if (need === 'any') return Object.keys(me.caps).some((k) => me.caps[k]);
+    return !!me.caps[need];
+  }
   function navFor(me) {
-    return NAV.filter((n) => me.role === 'admin' ? !n.staffOnly : (n.need !== 'admin' && me.caps && me.caps[n.need]));
+    return NAV.filter((n) => me.role === 'admin' ? !n.staffOnly : hasNeed(me, n.need));
   }
   // Startseite: bei Admins die Übersicht, sonst die erste Seite, die sie benutzen dürfen
   function homeFor(me) {
@@ -652,10 +661,12 @@
     }
     // Seite erlaubt? need = Recht für Mitarbeiter, roles = nur diese Rollen (z. B. nur Admin)
     const allowed = opts.need
-      ? (me.role === 'admin' || !!me.caps[opts.need])
+      ? hasNeed(me, opts.need)
       : opts.roles.indexOf(me.role) >= 0;
     if (!allowed) { location.replace(homeFor(me)); return null; }
-    buildShell(me, opts.page);
+    // bare: Seite ohne Menü (z. B. die Vollbild-Uhr)
+    if (opts.bare) { const m = $('content'); if (m) m.hidden = false; }
+    else buildShell(me, opts.page);
     watchAccess(me);
     return { me: me, sb: sb };
   }
