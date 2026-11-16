@@ -55,10 +55,7 @@
           <select id="pKind"><option value="single">Einfachwahl (eine Option)</option><option value="multi">Mehrfachwahl (bis zu N)</option><option value="rating">Bewertung (Sterne 1–5)</option></select></div>
         <div class="field" id="pMaxWrap"><label for="pMax">Höchstens wählbar</label><input id="pMax" type="number" min="2" max="20" value="2" inputmode="numeric"></div>
       </div>
-      <div class="field"><label for="pElig">Wer darf abstimmen?</label>
-        <select id="pElig"><option value="ticket">Gäste mit Ticket (Code vom Ticket, eine Stimme pro Ticket)</option><option value="device">Jeder mit dem Link (eine Stimme pro Gerät)</option></select>
-        <div class="hint" id="pEligHint"></div></div>
-      <label class="check" id="pCheckWrap"><input id="pCheck" type="checkbox"> Nur Gäste, die schon eingelassen wurden</label>
+      <div class="hint" style="margin-bottom:12px">Jedes Gerät kann einmal abstimmen (der Browser merkt sich das).</div>
       <div class="field" style="margin-top:12px"><label for="pRes">Ergebnis sichtbar</label>
         <select id="pRes"><option value="after_close">Erst nach Ende der Abstimmung</option><option value="live">Live während der Abstimmung</option></select></div>
       <div class="field"><span class="label">Optionen (mindestens 2)</span><div id="pOpts"></div>
@@ -134,7 +131,7 @@
     if (!polls.length) { $('list').innerHTML = '<div class="empty"><b>Noch keine Umfrage</b>Lege z. B. „Ballkönig/in“ an.</div>'; return; }
     $('list').innerHTML = polls.map((p) => {
       const s = STATUS[p.status], n = voters[p.id] || 0, o = opts[p.id] || [];
-      const who = p.eligibility === 'ticket' ? 'Ticket-Code' + (p.require_checkin ? ', nur eingelassene Gäste' : '') : 'ein Gerät = eine Stimme';
+      const who = 'ein Gerät = eine Stimme';
       const res = p.results_mode === 'live' ? 'Ergebnis live' : 'Ergebnis nach Ende';
       return '<section class="card poll" data-id="' + p.id + '"><div class="poll-head"><h3>' + esc(p.title) + '</h3><span class="badge ' + s[0] + '">' + s[1] + '</span></div>' +
         '<div class="muted small">' + KIND[p.kind] + (p.kind === 'multi' ? ' (bis ' + p.max_choices + ')' : '') + ' · ' + esc(who) + ' · ' + res + ' · <b>' + n + '</b> ' + (n === 1 ? 'Stimme' : 'Stimmen') + '</div>' +
@@ -213,14 +210,8 @@
 
   function syncForm() {
     $('pMaxWrap').hidden = $('pKind').value !== 'multi';
-    const t = $('pElig').value === 'ticket';
-    $('pCheckWrap').hidden = !t;
-    $('pEligHint').textContent = t
-      ? 'Jedes Ticket hat einen Code (steht auf dem Ticket und in der Ticket-Mail). Pro Ticket nur eine Stimme, auch bei Eltern mit mehreren Tickets.'
-      : 'Einfacher, aber weniger streng: Wer ein zweites Gerät oder den privaten Modus nutzt, kann nochmal abstimmen. Gut für Stimmungsbilder.';
   }
   $('pKind').addEventListener('change', syncForm);
-  $('pElig').addEventListener('change', syncForm);
 
   function openPoll(p) {
     editing = p || null;
@@ -229,8 +220,6 @@
     $('pDesc').value = p ? (p.description || '') : '';
     $('pKind').value = p ? p.kind : 'single';
     $('pMax').value = p ? Math.max(2, p.max_choices) : 2;
-    $('pElig').value = p ? p.eligibility : 'ticket';
-    $('pCheck').checked = p ? p.require_checkin : false;
     $('pRes').value = p ? p.results_mode : 'after_close';
     $('pOpts').innerHTML = '';
     const list = p ? (opts[p.id] || []) : [null, null, null];
@@ -252,8 +241,7 @@
     if (rows.some((r) => r.image_url && !/^https:\/\//i.test(r.image_url))) return SV.toast('Foto-Links müssen mit https:// beginnen.', 'bad');
     const kind = $('pKind').value;
     const max = kind === 'multi' ? Math.min(Math.max(parseInt($('pMax').value, 10) || 2, 2), Math.min(20, rows.length)) : 1;
-    const row = { title: title, description: $('pDesc').value.trim() || null, kind: kind, max_choices: max, eligibility: $('pElig').value,
-      require_checkin: $('pElig').value === 'ticket' && $('pCheck').checked, results_mode: $('pRes').value };
+    const row = { title: title, description: $('pDesc').value.trim() || null, kind: kind, max_choices: max, results_mode: $('pRes').value };
     await SV.busy($('pOk'), async () => {
       let id;
       if (editing) {

@@ -22,7 +22,6 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 14px; }
   .muted { color: var(--muted); }
   label.lbl { display: block; font-weight: 600; margin-bottom: 6px; }
-  input[type=text] { width: 100%; font: inherit; font-size: 20px; letter-spacing: .12em; text-transform: uppercase; text-align: center; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
   .opt { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; color: inherit; background: var(--card); border: 2px solid var(--line);
     border-radius: 14px; padding: 12px; margin-bottom: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
   .opt.sel { border-color: var(--c1); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c1) 22%, transparent); }
@@ -140,13 +139,8 @@
       return;
     }
     if (!order) order = shuffled(poll.options);
-    const ticket = poll.eligibility === 'ticket';
     const hint = poll.kind === 'single' ? 'Wähle eine Option.' : poll.kind === 'multi' ? 'Wähle bis zu ' + poll.max_choices + ' Optionen.' : 'Vergib Sterne (1–5). Du musst nicht alle bewerten.';
     let h = '';
-    if (ticket) {
-      h += '<div class="card"><label class="lbl" for="code">Dein Ticket-Code</label><input id="code" type="text" maxlength="9" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" value="' + esc(store.get('sv_code_' + TOKEN.slice(0, 16)) || '') + '">' +
-        '<p class="hint" style="margin:8px 0 0">Du findest ihn auf deinem Ticket und in der Ticket-Mail. Jedes Ticket zählt einmal.</p></div>';
-    }
     if (poll.description) h += '<p class="hint">' + esc(poll.description) + '</p>';
     h += '<p class="hint">' + hint + '</p><div id="opts">';
     order.forEach((o) => {
@@ -195,12 +189,7 @@
 
   async function send() {
     if (busy) return;
-    const ticket = poll.eligibility === 'ticket';
-    let ident;
-    if (ticket) {
-      ident = ($('code').value || '').trim();
-      if (ident.replace(/[^A-Za-z0-9]/g, '').length < 8) return setErr('Bitte gib deinen Ticket-Code ein (8 Zeichen).');
-    } else ident = deviceKey();
+    const ident = deviceKey();
     let choices;
     if (poll.kind === 'rating') {
       choices = Object.keys(stars).filter((id) => stars[id] > 0).map((id) => ({ o: id, s: stars[id] }));
@@ -215,7 +204,6 @@
       if (r.error) throw r.error;
       const d = r.data || {};
       if (d.ok || d.already) {
-        if (ticket) store.set('sv_code_' + TOKEN.slice(0, 16), ident);
         store.set(votedKey(), '1');
         done = true; await load(); return;
       }
@@ -232,12 +220,11 @@
       const first = !poll;
       poll = r.data;
       if (poll.event) theme(poll.event);
-      if (first && poll.status === 'open' && poll.eligibility === 'device' && store.get(votedKey()) === '1') done = true;
-      if (first && poll.status === 'open' && poll.eligibility === 'device' && !done) {
+      if (first && poll.status === 'open' && store.get(votedKey()) === '1') done = true;
+      if (first && poll.status === 'open' && !done) {
         const h = await sb.rpc('poll_has_voted', { p_token: TOKEN, p_ident: deviceKey() });
         if (!h.error && h.data === true) done = true;
       }
-      if (poll.status === 'open' && !done && document.activeElement && document.activeElement.id === 'code') return;  // nicht beim Tippen neu zeichnen
       if (poll.status === 'open' && !done && $('opts')) { refreshLive(); return; }
       render();
     } catch (e) { if (!poll) msg('⚠️', 'Keine Verbindung', 'Bitte versuche es gleich noch einmal.'); }

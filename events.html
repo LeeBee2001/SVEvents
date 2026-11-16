@@ -197,7 +197,7 @@
       ticket_style: $('evStyle').value
     }, logo);
     try {
-      const png = SV.ticketPng({ theme: theme, event: $('evName').value.trim() || 'Eventname', name: 'Max Mustermann', klass: '10b', type: 'Vorverkauf', code: 'K7M2-9QXA', token: 'BEISPIEL0000000000000000000000000000000000000000000000000000AB' });
+      const png = SV.ticketPng({ theme: theme, event: $('evName').value.trim() || 'Eventname', name: 'Max Mustermann', klass: '10b', type: 'Vorverkauf', token: 'BEISPIEL0000000000000000000000000000000000000000000000000000AB' });
       const cv = $('evPrev'); cv.getContext('2d').clearRect(0, 0, cv.width, cv.height); cv.getContext('2d').drawImage(png, 0, 0);
     } catch (e) { /* Vorschau ist optional */ }
   }

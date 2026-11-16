@@ -77,7 +77,7 @@
   async function fetchTickets() {
     let out = [], from = 0;
     for (;;) {
-      const r = await sb.from('tickets').select('id, token, code, guest_name, guest_class, status, ticket_type_id').eq('event_id', cur.id).order('created_at').range(from, from + 999);
+      const r = await sb.from('tickets').select('id, token, guest_name, guest_class, status, ticket_type_id').eq('event_id', cur.id).order('created_at').range(from, from + 999);
       if (r.error) throw r.error;
       out = out.concat(r.data);
       if (r.data.length < 1000) return out;
@@ -136,7 +136,7 @@
       if (my !== gen) return;
       const t = list[i];
       let url = '';
-      try { url = SV.ticketPng({ event: cur.name, name: t.guest_name, klass: t.guest_class, type: typeName(t.ticket_type_id), token: t.token, code: t.code, theme: theme }).toDataURL('image/png'); } catch (e) { continue; }
+      try { url = SV.ticketPng({ event: cur.name, name: t.guest_name, klass: t.guest_class, type: typeName(t.ticket_type_id), token: t.token, theme: theme }).toDataURL('image/png'); } catch (e) { continue; }
       const im = document.createElement('img');
       im.src = url; im.alt = 'Ticket ' + t.guest_name; im.className = 'pr-ticket';
       grid.appendChild(im);

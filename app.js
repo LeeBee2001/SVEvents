@@ -384,12 +384,6 @@
       else { bf = mix('#ffffff', th.c1, 0.14); bt = lum(th.c1) > 0.5 ? '#15171c' : th.c1; }
       g.fillStyle = bf; g.fill();
       g.fillStyle = bt; g.textBaseline = 'middle'; g.fillText(label, left + 22, by + bh / 2 + 1); g.textBaseline = 'alphabetic';
-      // Abstimmungs-Code neben der Ticketart (wenn Platz ist)
-      if (t.code) {
-        g.font = '600 26px ui-monospace, Menlo, Consolas, monospace';
-        const ct = 'Code ' + t.code, cx0 = left + bw + 22;
-        if (cx0 + g.measureText(ct).width < sx - 24) { g.fillStyle = sub; g.textBaseline = 'middle'; g.fillText(ct, cx0, by + bh / 2 + 1); g.textBaseline = 'alphabetic'; }
-      }
     }
 
     // QR-Code rechts (immer auf weißer Kachel, damit er scannbar bleibt)
@@ -553,17 +547,27 @@
 
   // ---------- Gerüst mit Navigation ----------
   const ico = (d) => '<svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="' + d + '"/></svg>';
-  // Seitenleiste: ab fünf Punkten mit Überschriften pro Gruppe
+  // Seitenleiste: ab fünf Punkten als ausklappbare Gruppen. Die Gruppe mit der aktuellen Seite ist offen,
+  // der Rest merkt sich, was du zuletzt offen oder zu gemacht hast.
+  const NAV_KEY = 'sv_nav_open';
+  const navOpenState = () => { try { return JSON.parse(localStorage.getItem(NAV_KEY) || '{}'); } catch (e) { return {}; } };
   function navHtml(items, page) {
     const grouped = items.length > 4;
-    let last = '', html = '';
+    let html = '';
     // Punkte einer Gruppe stehen zusammen (Reihenfolge der Gruppen = erstes Auftreten)
     const order = [];
     items.forEach((n) => { if (order.indexOf(n.group) < 0) order.push(n.group); });
     items = items.map((n, i) => ({ n: n, i: i })).sort((a, b) => order.indexOf(a.n.group) - order.indexOf(b.n.group) || a.i - b.i).map((x) => x.n);
-    items.forEach((n) => {
-      if (grouped && n.group !== last) { html += '<div class="nav-group">' + esc(n.group) + '</div>'; last = n.group; }
-      html += '<a href="' + n.href + '"' + (n.id === page ? ' aria-current="page"' : '') + '>' + n.label + '</a>';
+    const link = (n) => '<a href="' + n.href + '"' + (n.id === page ? ' aria-current="page"' : '') + '>' + n.label + '</a>';
+    if (!grouped) return items.map(link).join('');
+    const st = navOpenState();
+    order.forEach((g) => {
+      const list = items.filter((n) => n.group === g);
+      const hasCur = list.some((n) => n.id === page);
+      const open = hasCur || st[g] === true;
+      html += '<details class="nav-grp" data-group="' + esc(g) + '"' + (open ? ' open' : '') + '>' +
+        '<summary class="nav-group">' + esc(g) + '<span class="nav-chev" aria-hidden="true">›</span></summary>' +
+        list.map(link).join('') + '</details>';
     });
     return html;
   }
@@ -621,6 +625,14 @@
     $$('[data-theme-set]', side).forEach((b) => b.addEventListener('click', () => {
       window.svTheme.set(b.dataset.themeSet);
       $$('[data-theme-set]', side).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    // Gruppen-Zustand merken (nur, wenn du selbst auf- oder zuklappst)
+    $$('details.nav-grp', side).forEach((d) => d.addEventListener('toggle', () => {
+      try {
+        const st = navOpenState();
+        st[d.dataset.group] = d.open;
+        localStorage.setItem(NAV_KEY, JSON.stringify(st));
+      } catch (e) { /* egal */ }
     }));
     const cur = side.querySelector('[aria-current]');
     if (cur && cur.scrollIntoView) cur.scrollIntoView({ inline: 'center', block: 'nearest' });
