@@ -34,6 +34,11 @@
       <div class="tagrid" id="tagGrid"></div>
       <div class="hint">Antippen: Marke vergeben bzw. zurücknehmen. Farbig = vergeben.</div>
     </section>
+    <section class="section" id="tokenSec" hidden>
+      <div class="section-head"><h2>Token-Scanner</h2></div>
+      <p class="muted" style="margin-top:0">Tickets scannen: pro Besuch ein Token, danach kassieren.</p>
+      <a class="btn" id="tokenLink" href="stationsscan.html">Scanner öffnen</a>
+    </section>
     <section class="section" id="nextSec" hidden>
       <div class="section-head"><h2>Nächster Punkt im Ablauf</h2></div>
       <div class="countdown" id="nextCount" style="font-size:34px">–</div>
@@ -122,6 +127,8 @@
     $('hNote').textContent = [cur.station_note, cur.note].filter(Boolean).join(' · ');
     $('counterSec').hidden = cur.kind !== 'counter';
     $('tagSec').hidden = cur.kind !== 'tags';
+    $('tokenSec').hidden = cur.kind !== 'tokens';
+    if (cur.kind === 'tokens') $('tokenLink').href = 'stationsscan.html?station=' + encodeURIComponent(cur.station_id);
     if (cur.kind === 'counter') $('cnt').textContent = cur.counter;
     if (cur.kind === 'tags') {
       const n = cur.tag_count;

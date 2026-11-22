@@ -54,6 +54,12 @@
       </div>
     </section>
 
+    <section class="section" id="stSec" hidden>
+      <div class="section-head"><h2>Token-Stationen</h2></div>
+      <div id="stTbl"></div>
+      <p class="hint">Tokens sind die inklusiven Besuche pro Ticket. Bezahlte Besuche kommen zusätzlich zu den Ticket-Einnahmen und sind in „Einnahmen“ oben schon eingerechnet.</p>
+    </section>
+
     <section class="section">
       <div class="section-head"><h2>Verkäufe</h2></div>
       <div id="types"></div>
@@ -219,7 +225,7 @@
   const fmtOpt = (v) => (v == null ? '–' : money(v));
 
   function renderMoney() {
-    const rev = data.revenue;
+    const rev = data.revenue + data.stationRev;
     const sum = costs.reduce((a, c) => a + used(c), 0);
     const planned = costs.reduce((a, c) => a + Number(c.planned == null ? (c.amount == null ? 0 : c.amount) : c.planned), 0);
     const open = costs.filter((c) => c.amount == null).length;
@@ -234,7 +240,7 @@
         '<tr class="total"><td>Summe</td><td class="right num">' + esc(money(planned)) + '</td><td class="right num">' + esc(money(sum)) + '</td><td></td><td></td></tr></tbody></table></div>'
       : '<p class="muted">Noch keine Kosten eingetragen.</p>';
     $('result').innerHTML = '<div class="tablewrap"><table class="data"><tbody>' +
-      '<tr><td>Einnahmen</td><td class="right num">' + esc(money(rev)) + '</td></tr>' +
+      '<tr><td>Einnahmen' + (data.stationRev ? ' <span class="muted small">(Tickets ' + esc(money(data.revenue)) + ' + Stationen ' + esc(money(data.stationRev)) + ')</span>' : '') + '</td><td class="right num">' + esc(money(rev)) + '</td></tr>' +
       (data.discN ? '<tr><td class="muted">davon Rabatte gewährt <span class="small">(' + data.discN + ' Tickets' + (data.freeN ? ', ' + data.freeN + ' gratis' : '') + ')</span></td><td class="right num muted">− ' + esc(money(data.discTotal)) + '</td></tr>' : '') +
       '<tr><td>Kosten' + (open ? ' <span class="muted small">(' + open + ' Posten noch geplant)</span>' : '') + '</td><td class="right num">− ' + esc(money(sum)) + '</td></tr>' +
       '<tr class="total"><td>' + (profit < 0 ? 'Verlust' : 'Gewinn') + (open ? ' <span class="muted small">(voraussichtlich)</span>' : '') + '</td><td class="right num ' + (profit < 0 ? 'neg' : 'pos') + '">' + esc(money(profit)) + '</td></tr>' +
@@ -247,7 +253,7 @@
   function renderFigs(sum, profit) {
     const d = data;
     $('figs').innerHTML =
-      figure(money(d.revenue), 'Einnahmen') +
+      figure(money(d.revenue + d.stationRev), 'Einnahmen') +
       figure(money(sum), 'Kosten') +
       figure(money(profit), profit < 0 ? 'Verlust' : 'Gewinn', profit < 0 ? 'neg' : 'pos') +
       figure(String(d.entered), 'Gäste waren da') +
@@ -260,11 +266,12 @@
     if (cur) $('prHead').innerHTML = '<div><div class="pr-ev">' + esc(cur.name) + '</div><h2>Insights</h2></div><div class="pr-meta">' + (cur.starts_at ? esc(SV.fmtDay(cur.starts_at)) + (cur.location ? ' · ' + esc(cur.location) : '') + '<br>' : '') + 'Stand: ' + esc(SV.fmtDay(new Date()) + ', ' + SV.fmtTime(new Date())) + ' Uhr</div>';
     $('resetBtn').hidden = !cur;
     if (!cur) return;
-    const [types, tickets, log, costRows] = await Promise.all([
+    const [types, tickets, log, costRows, stRows] = await Promise.all([
       sb.from('ticket_types').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; }),
       fetchAll(() => sb.from('tickets').select('id, status, ticket_type_id, created_at, price_paid, discount_amount').eq('event_id', cur.id).order('created_at')),
       fetchAll(() => sb.from('scan_log').select('ticket_id, direction, result, scanned_at, tickets!inner(event_id)').eq('tickets.event_id', cur.id).order('scanned_at')),
-      sb.from('event_costs').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; })
+      sb.from('event_costs').select('*').eq('event_id', cur.id).order('created_at').then((r) => { if (r.error) throw r.error; return r.data; }),
+      sb.rpc('station_token_stats', { p_event: cur.id }).then((r) => { if (r.error) throw r.error; return r.data || []; })
     ]);
     costs = costRows;
     const byId = {}; types.forEach((t) => { byId[t.id] = t; });
@@ -283,7 +290,12 @@
     });
     types.forEach((t) => { revenue += stat[t.id].rev; });
     const entered = live.filter((t) => everIn.has(t.id)).length;
-    data = { discTotal, discN, freeN, revenue, entered, sold: live.length, noShows: live.length - entered, peak: null };
+    const stationRev = stRows.reduce((a, s) => a + Number(s.revenue), 0);
+    $('stSec').hidden = !stRows.length;
+    $('stTbl').innerHTML = stRows.length ? '<div class="tablewrap"><table class="data"><thead><tr><th>Station</th><th class="right">Preis</th><th class="right">Tokens ausgegeben</th><th class="right">Tokens benutzt</th><th class="right">Bezahlte Besuche</th><th class="right">Einnahmen</th><th class="right">Gäste</th></tr></thead><tbody>' +
+      stRows.map((s) => '<tr><td>' + esc(s.station_name) + '</td><td class="right num">' + esc(money(s.price)) + '</td><td class="right num">' + s.granted + '</td><td class="right num">' + s.used + '</td><td class="right num">' + s.paid_visits + '</td><td class="right num">' + esc(money(s.revenue)) + '</td><td class="right num">' + s.guests + '</td></tr>').join('') +
+      '</tbody></table></div>' : '';
+    data = { discTotal, discN, freeN, revenue, stationRev, entered, sold: live.length, noShows: live.length - entered, peak: null };
 
     data.peak = drawCurve($('curve'), pts);
     $('curveNote').textContent = data.peak ? 'Höchststand ' + data.peak.n + ' um ' + fmtDT(data.peak.t) + ' Uhr' : '';

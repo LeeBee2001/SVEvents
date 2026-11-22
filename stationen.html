@@ -49,11 +49,25 @@
           <option value="plain">Nur Schichtplan</option>
           <option value="counter">Mit Zähler (+1 / −1)</option>
           <option value="tags">Mit Nummernmarken (Garderobe)</option>
+          <option value="tokens">Token-Station (Besuche pro Ticket, z. B. Fotos)</option>
         </select></div>
       <div class="field" id="stTagsWrap" hidden><label for="stTags">Anzahl Marken</label><input id="stTags" type="number" min="1" max="1000" inputmode="numeric"></div>
+      <div class="field" id="stPriceWrap" hidden><label for="stPrice">Preis pro weiterem Besuch (€)</label><input id="stPrice" inputmode="decimal" placeholder="0,50">
+        <div class="hint">Gilt, wenn die inklusiven Besuche (Tokens) aufgebraucht sind. 0 = danach kostenlos. Die Tokens pro Ticketart stellst du danach auf der Stationskarte ein.</div></div>
       <div class="field"><label for="stNote">Hinweis für Helfer (optional)</label><textarea id="stNote" rows="2" maxlength="500" placeholder="z. B. Kasse im Schrank links"></textarea></div>
     </div>
     <div class="dlg-foot"><button class="btn secondary" type="button" id="stCancel">Abbrechen</button><button class="btn" type="submit" id="stOk">Speichern</button></div>
+  </form>
+</dialog>
+
+<dialog id="tkDlg">
+  <form class="dlg" id="tkForm" method="dialog" autocomplete="off">
+    <div class="dlg-body">
+      <h3 id="tkTitle" style="margin:0 0 4px">Tokens</h3>
+      <p class="muted small" style="margin:0 0 12px">Wie viele Besuche sind pro Ticket inklusive? 0 = nichts inklusive, jeder Besuch kostet den Preis der Station.</p>
+      <div id="tkRows"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn secondary" type="button" id="tkCancel">Abbrechen</button><button class="btn" type="submit" id="tkOk">Speichern</button></div>
   </form>
 </dialog>
 
@@ -81,9 +95,9 @@
   if (!ctx) return;
   const sb = ctx.sb;
   const { esc, fmt, fmtTime, $ } = SV;
-  const KIND = { plain: 'Schichtplan', counter: 'Zähler', tags: 'Marken' };
+  const KIND = { plain: 'Schichtplan', counter: 'Zähler', tags: 'Marken', tokens: 'Token-Station' };
   let events = [], cur = null, stations = [], shifts = [], reports = [], tagCount = {}, staff = [];
-  let editSt = null, shStation = null;
+  let editSt = null, shStation = null, types = [], rules = {}, tstats = {}, tkStation = null;
 
   const t = (iso) => new Date(iso).getTime();
   const range = (s) => fmtTime(s.starts_at) + '–' + fmtTime(s.ends_at);
@@ -93,17 +107,23 @@
     const st = await sb.from('stations').select('*').eq('event_id', ev.id).order('sort').order('created_at');
     if (st.error) throw st.error;
     const ids = st.data.map((x) => x.id);
-    let sh = { data: [] }, rp = { data: [] }, tg = { data: [] };
+    let sh = { data: [] }, rp = { data: [] }, tg = { data: [] }, ty = { data: [] }, ru = { data: [] }, ts = { data: [] };
     if (ids.length) {
-      [sh, rp, tg] = await Promise.all([
+      [sh, rp, tg, ty, ru, ts] = await Promise.all([
         sb.rpc('station_roster', { p_event: ev.id }),
         sb.from('station_reports').select('*').in('station_id', ids).order('created_at', { ascending: false }).limit(60),
-        sb.from('station_tags').select('station_id').in('station_id', ids)
+        sb.from('station_tags').select('station_id').in('station_id', ids),
+        sb.from('ticket_types').select('id, name').eq('event_id', ev.id).order('created_at'),
+        sb.from('station_token_rules').select('station_id, ticket_type_id, tokens').in('station_id', ids),
+        sb.rpc('station_token_stats', { p_event: ev.id })
       ]);
-      [sh, rp, tg].forEach((r) => { if (r.error) throw r.error; });
+      [sh, rp, tg, ty, ru, ts].forEach((r) => { if (r.error) throw r.error; });
     }
     if (cur !== ev) return;
     stations = st.data; shifts = sh.data || []; reports = rp.data || [];
+    types = ty.data || []; rules = {}; tstats = {};
+    (ru.data || []).forEach((r) => { (rules[r.station_id] = rules[r.station_id] || {})[r.ticket_type_id] = r.tokens; });
+    (ts.data || []).forEach((r) => { tstats[r.station_id] = r; });
     tagCount = {};
     (tg.data || []).forEach((r) => { tagCount[r.station_id] = (tagCount[r.station_id] || 0) + 1; });
     render();
@@ -141,6 +161,12 @@
   function stationStatus(s) {
     if (s.kind === 'counter') return 'Zähler: <b>' + s.counter + '</b>';
     if (s.kind === 'tags') return 'Marken: <b>' + (tagCount[s.id] || 0) + '</b> von ' + s.tag_count + ' vergeben';
+    if (s.kind === 'tokens') {
+      const r = rules[s.id] || {}, st = tstats[s.id];
+      const per = types.map((x) => esc(x.name) + ' ' + (r[x.id] || 0)).join(', ');
+      return 'Preis danach: <b>' + SV.money(s.token_price) + '</b> · Tokens: ' + (per || 'keine Ticketarten') +
+        (st ? '<br>' + st.used + ' von ' + st.granted + ' Tokens benutzt · ' + st.paid_visits + ' bezahlte Besuche (' + SV.money(st.revenue) + ')' : '');
+    }
     return '';
   }
 
@@ -151,6 +177,7 @@
       return '<div class="station-card" data-sid="' + s.id + '"><div class="section-head" style="margin-bottom:8px"><div><h3 style="margin:0">' + esc(s.name) +
         ' <span class="badge accent">' + KIND[s.kind] + '</span></h3><div class="muted small">' + stationStatus(s) + (s.note ? ' · ' + esc(s.note) : '') + '</div></div>' +
         '<div class="actions"><button class="btn secondary sm" type="button" data-act="addShift">Schicht +</button>' +
+        (s.kind === 'tokens' ? '<button class="btn secondary sm" type="button" data-act="tokens">Tokens einstellen</button><a class="btn secondary sm" href="stationsscan.html?station=' + s.id + '">Scanner öffnen</a>' : '') +
         '<button class="btn secondary sm" type="button" data-act="editSt">Bearbeiten</button>' +
         (s.kind !== 'plain' ? '<button class="btn secondary sm" type="button" data-act="resetSt">Zurücksetzen</button>' : '') +
         '<button class="btn secondary sm" type="button" data-act="delSt">Löschen</button></div></div>' +
@@ -179,8 +206,9 @@
         const r = await sb.from('shifts').delete().eq('id', b.dataset.id);
         if (r.error) return SV.fail(r.error);
         await load();
-      } else if (act === 'resetSt') {
-        if (!await SV.confirmBox('Zähler und alle vergebenen Marken von „' + s.name + '“ werden auf null gesetzt.', { title: 'Station zurücksetzen?', ok: 'Zurücksetzen', danger: true })) return;
+      } else if (act === 'tokens') openTokens(s);
+      else if (act === 'resetSt') {
+        if (!await SV.confirmBox(s.kind === 'tokens' ? 'Alle gescannten Besuche und Token-Anpassungen von „' + s.name + '“ werden gelöscht. Die Tokens der Ticketarten bleiben.' : 'Zähler und alle vergebenen Marken von „' + s.name + '“ werden auf null gesetzt.', { title: 'Station zurücksetzen?', ok: 'Zurücksetzen', danger: true })) return;
         const r = await sb.rpc('station_reset', { p_station: s.id });
         if (r.error) return SV.fail(r.error);
         await load();
@@ -194,7 +222,7 @@
   });
 
   // ---- Station anlegen / bearbeiten ----
-  function syncKind() { $('stTagsWrap').hidden = $('stKind').value !== 'tags'; }
+  function syncKind() { $('stTagsWrap').hidden = $('stKind').value !== 'tags'; $('stPriceWrap').hidden = $('stKind').value !== 'tokens'; }
   $('stKind').addEventListener('change', syncKind);
   function openStation(s) {
     editSt = s || null;
@@ -202,6 +230,7 @@
     $('stName').value = s ? s.name : '';
     $('stKind').value = s ? s.kind : 'plain';
     $('stTags').value = s && s.tag_count ? s.tag_count : '';
+    $('stPrice').value = s && s.kind === 'tokens' ? String(Number(s.token_price)).replace('.', ',') : '';
     $('stNote').value = s ? (s.note || '') : '';
     syncKind();
     $('stDlg').showModal();
@@ -215,13 +244,43 @@
     const tags = kind === 'tags' ? parseInt($('stTags').value, 10) : 0;
     if (!name) return SV.toast('Bitte einen Namen eingeben.', 'bad');
     if (kind === 'tags' && !(tags >= 1 && tags <= 1000)) return SV.toast('Bitte eine Markenanzahl zwischen 1 und 1000 eingeben.', 'bad');
-    const row = { name: name, kind: kind, tag_count: tags, note: $('stNote').value.trim() || null };
+    let price = 0;
+    if (kind === 'tokens') {
+      price = Number(String($('stPrice').value || '0').replace(',', '.'));
+      if (!(price >= 0 && price <= 1000)) return SV.toast('Bitte einen Preis von 0 bis 1000 € eingeben.', 'bad');
+      price = Math.round(price * 100) / 100;
+    }
+    const row = { name: name, kind: kind, tag_count: tags, token_price: price, note: $('stNote').value.trim() || null };
     await SV.busy($('stOk'), async () => {
       const r = editSt
         ? await sb.from('stations').update(row).eq('id', editSt.id)
         : await sb.from('stations').insert(Object.assign({ event_id: cur.id, sort: stations.length }, row));
       if (r.error) return SV.fail(r.error);
       $('stDlg').close();
+      await load();
+    });
+  });
+
+  // ---- Tokens pro Ticketart ----
+  function openTokens(s) {
+    tkStation = s;
+    $('tkTitle').textContent = 'Tokens: ' + s.name;
+    const r = rules[s.id] || {};
+    $('tkRows').innerHTML = types.length ? types.map((x) => '<div class="field"><label for="tk_' + x.id + '">' + esc(x.name) + '</label><input id="tk_' + x.id + '" data-type="' + x.id + '" type="number" min="0" max="100" inputmode="numeric" value="' + (r[x.id] || 0) + '"></div>').join('')
+      : '<p class="muted">Dieses Event hat noch keine Ticketarten.</p>';
+    $('tkDlg').showModal();
+  }
+  $('tkCancel').addEventListener('click', () => $('tkDlg').close());
+  $('tkForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rows = Array.from($('tkRows').querySelectorAll('input[data-type]')).map((i) => ({ station_id: tkStation.id, ticket_type_id: i.dataset.type, tokens: parseInt(i.value, 10) }));
+    if (rows.some((x) => !(x.tokens >= 0 && x.tokens <= 100))) return SV.toast('Bitte Zahlen von 0 bis 100 eingeben.', 'bad');
+    await SV.busy($('tkOk'), async () => {
+      if (rows.length) {
+        const r = await sb.from('station_token_rules').upsert(rows, { onConflict: 'station_id,ticket_type_id' });
+        if (r.error) return SV.fail(r.error);
+      }
+      $('tkDlg').close();
       await load();
     });
   });

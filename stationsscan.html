@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Token-Scanner – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+<style>
+  .tk-act { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; justify-content: center; }
+  .tk-act .btn { min-height: 52px; font-size: 18px; }
+  .tk-big { font-size: 44px; font-weight: 800; line-height: 1.05; margin: 6px 0; }
+  .tk-sess { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; }
+  #tkVerdict .v-guest { font-size: 24px; }
+</style>
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Token-Scanner</h1>
+      <p class="muted">Ticket scannen: pro Besuch wird ein Token abgezogen. Sind alle weg, wird kassiert.</p>
+    </div>
+  </div>
+
+  <div id="none" class="empty" hidden>
+    <b>Keine Token-Station</b>
+    Dir ist keine Token-Station zugeteilt. Ein Admin legt sie unter „Stationen“ an und teilt dich in eine Schicht ein.
+  </div>
+
+  <div id="main" hidden>
+    <div class="toolbar">
+      <div class="field"><label for="stSel">Station</label><select id="stSel"></select></div>
+      <div class="field"><button class="btn secondary" type="button" id="sndBtn" aria-pressed="true">Ton: an</button></div>
+    </div>
+    <p class="muted small" id="stInfo"></p>
+
+    <div class="scan-grid">
+      <div class="scan-left">
+        <div id="reader"></div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn" type="button" id="camStart">Kamera starten</button>
+          <button class="btn secondary" type="button" id="camStop" hidden>Kamera stoppen</button>
+        </div>
+        <details style="margin-top:18px">
+          <summary class="muted" style="cursor:pointer">Code von Hand eingeben</summary>
+          <form id="manualForm" style="margin-top:10px" autocomplete="off">
+            <div class="field"><label for="manual">Ticket-Code</label><input id="manual" class="mono" spellcheck="false" autocapitalize="off"></div>
+            <button class="btn secondary" type="submit">Prüfen</button>
+          </form>
+        </details>
+        <div class="tk-sess muted" style="margin-top:16px" id="sess"></div>
+      </div>
+      <div class="scan-right">
+        <div id="tkVerdict" class="verdict idle" role="status" aria-live="assertive">
+          <div class="v-title">Bereit</div>
+          <div class="v-sub">Kamera starten und den QR-Code des Tickets scannen.</div>
+        </div>
+        <div class="tk-act" id="tkAct" hidden></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'schicht', need: 'stations' });
+  if (!ctx) return;
+  const sb = ctx.sb, me = ctx.me;
+  const { $, esc } = SV;
+  const q = new URLSearchParams(location.search);
+
+  let stations = [], cur = null, scanner = null, working = false, wake = null;
+  let last = { token: '', at: 0 };
+  let pending = null;              // Ticket, das noch kassiert werden muss
+  let lastVisit = null;            // letzter Besuch (zum Zurücknehmen)
+  let lastTicket = null;
+  const sess = { tokens: 0, paid: 0, sum: 0, free: 0 };
+  let undoTimer = null;
+
+  // ---------- Ton ----------
+  let soundOn = true;
+  try { soundOn = localStorage.getItem('sv_sound') !== 'off'; } catch (e) { /* egal */ }
+  const showSound = () => { $('sndBtn').textContent = 'Ton: ' + (soundOn ? 'an' : 'aus'); $('sndBtn').setAttribute('aria-pressed', String(soundOn)); };
+  let audio = null;
+  function ac() { try { if (!audio) { const A = window.AudioContext || window.webkitAudioContext; if (A) audio = new A(); } if (audio && audio.state === 'suspended') audio.resume(); } catch (e) { audio = null; } return audio; }
+  function tone(a, f, s, d, type, v) { const o = a.createOscillator(), g = a.createGain(); o.type = type; o.frequency.value = f; const t0 = a.currentTime + s;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(v, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d); o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0 + d + 0.05); }
+  function beep(kind) {
+    if (!soundOn) return; const a = ac(); if (!a) return;
+    if (kind === 'ok') { tone(a, 880, 0, 0.12, 'sine', 0.35); tone(a, 1320, 0.12, 0.18, 'sine', 0.35); }
+    else if (kind === 'warn') { tone(a, 520, 0, 0.14, 'triangle', 0.4); tone(a, 520, 0.22, 0.14, 'triangle', 0.4); }
+    else { tone(a, 160, 0, 0.45, 'sawtooth', 0.3); }
+  }
+  $('sndBtn').addEventListener('click', () => { soundOn = !soundOn; try { localStorage.setItem('sv_sound', soundOn ? 'on' : 'off'); } catch (e) { /* egal */ } showSound(); if (soundOn) beep('ok'); });
+  showSound();
+
+  // ---------- Anzeige ----------
+  function showSess() {
+    $('sess').innerHTML = '<span>Tokens abgezogen: <b>' + sess.tokens + '</b></span><span>Kassiert: <b>' + sess.paid + '</b> (' + SV.money(sess.sum) + ')</span>' + (sess.free ? '<span>Kostenlos: <b>' + sess.free + '</b></span>' : '') +
+      '<span class="small">seit Öffnen der Seite</span>';
+  }
+  function actions(html) { const a = $('tkAct'); a.innerHTML = html || ''; a.hidden = !html; }
+  function adminBtns(r) {
+    return me.role === 'admin' && r.ticket_id ? '<button class="btn secondary" type="button" data-adj="1">+1 Token</button><button class="btn secondary" type="button" data-adj="-1">−1 Token</button>' : '';
+  }
+  function tokenLine(r) {
+    if (r.total == null) return '';
+    return '<div class="tk-big">' + r.remaining + ' von ' + r.total + '</div><div class="v-sub">Tokens übrig</div>';
+  }
+
+  function verdict(r, kind, title, extra) {
+    const el = $('tkVerdict');
+    el.className = 'verdict v-' + kind;
+    let h = '<div class="v-title">' + esc(title || r.message || r.result) + '</div>';
+    if (r.guest_name) {
+      h += '<div class="v-guest">' + esc(r.guest_name) + (r.guest_class ? ', ' + esc(r.guest_class) : '') + '</div>';
+      if (r.ticket_type) h += '<div class="v-sub">' + esc(r.ticket_type) + '</div>';
+    }
+    h += extra || '';
+    el.innerHTML = h;
+    el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+    beep(kind);
+    try { if (navigator.vibrate) navigator.vibrate(kind === 'ok' ? 80 : kind === 'warn' ? [90, 60, 90] : [300]); } catch (e) { /* iPhone */ }
+  }
+
+  function setUndo(visitId) {
+    clearTimeout(undoTimer);
+    lastVisit = visitId || null;
+    if (visitId) undoTimer = setTimeout(() => { lastVisit = null; refreshActions(); }, 30000);
+  }
+  function refreshActions() {
+    if (pending) {
+      actions('<button class="btn" type="button" id="payBtn">Kassiert: ' + esc(SV.money(cur.token_price)) + '</button><button class="btn secondary" type="button" id="cancelBtn">Abbrechen</button>');
+      return;
+    }
+    actions((lastVisit ? '<button class="btn secondary" type="button" data-undo="1">Rückgängig</button>' : '') + adminBtns(lastTicket || {}));
+  }
+
+  function handle(r) {
+    pending = null; lastTicket = r.ticket_id ? r : null;
+    if (r.result === 'ok') {
+      sess.tokens++; setUndo(r.visit_id);
+      verdict(r, 'ok', r.message, tokenLine(r));
+    } else if (r.result === 'pay') {
+      setUndo(null); pending = r;
+      verdict(r, 'bad', 'Keine Tokens mehr', '<div class="tk-big">' + esc(SV.money(r.price)) + '</div><div class="v-sub">bitte kassieren, dann auf „Kassiert“ tippen</div>');
+    } else if (r.result === 'free') {
+      sess.free++; setUndo(r.visit_id);
+      verdict(r, 'warn', 'Keine Tokens mehr, hier kostenlos', '');
+    } else if (r.result === 'duplicate') {
+      verdict(r, 'warn', 'Gerade eben schon gescannt', tokenLine(r));
+    } else {
+      setUndo(null);
+      verdict(r, 'bad', r.message || 'Nicht gültig', '');
+    }
+    refreshActions(); showSess();
+  }
+
+  async function onCode(text) {
+    const token = String(text || '').trim();
+    if (!token || working || !cur) return;
+    if (token === last.token && Date.now() - last.at < 2500) return;
+    ac(); working = true;
+    const r = await sb.rpc('station_scan', { p_station: cur.id, p_token: token });
+    working = false;
+    last = { token: token, at: Date.now() };
+    if (r.error) { pending = null; setUndo(null); verdict({}, 'bad', SV.errText(r.error), ''); refreshActions(); }
+    else handle(r.data);
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b || !cur) return;
+    try {
+      if (b.id === 'payBtn' && pending) {
+        await SV.busy(b, async () => {
+          const r = await sb.rpc('station_pay', { p_station: cur.id, p_ticket: pending.ticket_id });
+          if (r.error) return SV.fail(r.error);
+          const p = pending; pending = null;
+          sess.paid++; sess.sum += Number(r.data.amount) || 0;
+          lastTicket = p; setUndo(r.data.visit_id);
+          verdict(p, 'ok', 'Bezahlt: ' + SV.money(r.data.amount), '');
+          refreshActions(); showSess();
+        });
+      } else if (b.id === 'cancelBtn') {
+        pending = null; lastTicket = null;
+        $('tkVerdict').className = 'verdict idle';
+        $('tkVerdict').innerHTML = '<div class="v-title">Abgebrochen</div><div class="v-sub">Es wurde nichts gebucht.</div>';
+        refreshActions();
+      } else if (b.dataset.undo && lastVisit) {
+        await SV.busy(b, async () => {
+          const r = await sb.rpc('station_visit_undo', { p_visit: lastVisit });
+          if (r.error) return SV.fail(r.error);
+          setUndo(null);
+          SV.toast('Besuch zurückgenommen');
+          $('tkVerdict').className = 'verdict v-warn';
+          $('tkVerdict').innerHTML = '<div class="v-title">Zurückgenommen</div>' + tokenLine(Object.assign({}, lastTicket || {}, r.data));
+          refreshActions();
+        });
+      } else if (b.dataset.adj && lastTicket && lastTicket.ticket_id) {
+        await SV.busy(b, async () => {
+          const r = await sb.rpc('station_token_adjust', { p_station: cur.id, p_ticket: lastTicket.ticket_id, p_delta: parseInt(b.dataset.adj, 10) });
+          if (r.error) return SV.fail(r.error);
+          SV.toast('Tokens angepasst: jetzt ' + r.data.remaining + ' von ' + r.data.total);
+          verdict(Object.assign({}, lastTicket, r.data), 'warn', 'Tokens angepasst', tokenLine(r.data));
+          refreshActions();
+        });
+      }
+    } catch (err) { SV.fail(err); }
+  });
+
+  // ---------- Kamera ----------
+  async function holdScreen() { try { if (navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); } catch (e) { /* egal */ } }
+  async function startCam() {
+    if (scanner) return;
+    scanner = new Html5Qrcode('reader');
+    try {
+      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } }, (txt) => onCode(txt), () => {});
+      $('camStart').hidden = true; $('camStop').hidden = false; holdScreen();
+    } catch (err) { scanner = null; SV.toast('Die Kamera lässt sich nicht starten. Erlaube den Kamerazugriff in den Browser-Einstellungen.', 'bad'); }
+  }
+  async function stopCam() {
+    if (!scanner) return;
+    try { await scanner.stop(); scanner.clear(); } catch (e) { /* egal */ }
+    scanner = null; $('camStart').hidden = false; $('camStop').hidden = true;
+    if (wake) { try { await wake.release(); } catch (e) { /* egal */ } wake = null; }
+  }
+  $('camStart').addEventListener('click', startCam);
+  $('camStop').addEventListener('click', stopCam);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && scanner) holdScreen(); });
+  $('manualForm').addEventListener('submit', (e) => { e.preventDefault(); last = { token: '', at: 0 }; onCode($('manual').value); $('manual').value = ''; });
+
+  // ---------- Station wählen ----------
+  function showStation() {
+    cur = stations.find((s) => s.id === $('stSel').value) || stations[0];
+    pending = null; lastTicket = null; setUndo(null); refreshActions();
+    $('stInfo').textContent = (cur.event_name ? cur.event_name + ' · ' : '') + 'Preis nach den Tokens: ' + SV.money(cur.token_price);
+    $('tkVerdict').className = 'verdict idle';
+    $('tkVerdict').innerHTML = '<div class="v-title">Bereit</div><div class="v-sub">Kamera starten und den QR-Code des Tickets scannen.</div>';
+  }
+
+  try {
+    const r = await sb.from('stations').select('id, name, event_id, token_price').eq('kind', 'tokens').order('name');
+    if (r.error) throw r.error;
+    stations = r.data || [];
+    if (!stations.length) { $('none').hidden = false; return; }
+    const ev = await sb.from('events').select('id, name').in('id', Array.from(new Set(stations.map((s) => s.event_id))));
+    const names = {}; ((ev.data) || []).forEach((e) => { names[e.id] = e.name; });
+    stations.forEach((s) => { s.event_name = names[s.event_id] || ''; s.token_price = Number(s.token_price) || 0; });
+    $('stSel').innerHTML = stations.map((s) => '<option value="' + s.id + '">' + esc(s.name) + (s.event_name ? ' (' + esc(s.event_name) + ')' : '') + '</option>').join('');
+    const want = q.get('station');
+    if (want && stations.some((s) => s.id === want)) $('stSel').value = want;
+    $('stSel').addEventListener('change', showStation);
+    $('main').hidden = false;
+    showStation(); showSess();
+  } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>
