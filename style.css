@@ -562,3 +562,7 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, 0.4); }
   .section { break-inside: avoid; }
   .pr-ev, .pr-meta { color: #444; }
 }
+
+/* Zugang noch nicht gestartet: nur ansehen */
+body.ro [data-ro] { opacity: .45; cursor: not-allowed; }
+.ro-note { margin-top: 0; }

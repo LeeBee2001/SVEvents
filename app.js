@@ -525,9 +525,35 @@
     if (!p.active) return 'inactive';
     if (p.role === 'admin') return 'ok';
     const now = Date.now();
-    if (p.valid_from && now < new Date(p.valid_from).getTime()) return 'notyet';
     if (p.valid_until && now > new Date(p.valid_until).getTime()) return 'expired';
     return 'ok';
+  }
+
+  // Vor dem Start des Zugangs: Anmelden ja, Ändern nein (nur ansehen)
+  function isReadonly(p) {
+    return !!p && p.role !== 'admin' && !!p.valid_from && Date.now() < new Date(p.valid_from).getTime();
+  }
+  const RO_SEL = 'button:not([role="tab"]):not([role="radio"]):not([data-ro-ok]):not([data-theme-set]):not(.nav-chev), ' +
+    'input[type="submit"], textarea, form input, form select';
+  function applyReadonly(me) {
+    document.body.classList.add('ro');
+    const main = $('content');
+    if (!main) return;
+    const note = document.createElement('div');
+    note.className = 'notice ro-note';
+    note.textContent = 'Dein Zugang startet am ' + fmt(me.valid_from) + '. Bis dahin kannst du dich umsehen und alles ausprobieren, aber nichts ändern.';
+    main.insertBefore(note, main.firstChild);
+    let busy = false;
+    const lock = () => {
+      if (busy) return; busy = true;
+      main.querySelectorAll(RO_SEL).forEach((el) => {
+        if (el.closest('[data-ro-ok]') || el.closest('.ro-note')) return;
+        if (!el.disabled) { el.disabled = true; el.setAttribute('data-ro', '1'); }
+      });
+      busy = false;
+    };
+    lock();
+    new MutationObserver(lock).observe(main, { childList: true, subtree: true });
   }
 
   function fatal(msg) {
@@ -642,9 +668,11 @@
   // Zugang regelmäßig neu prüfen: läuft er ab oder wird er gesperrt, geht es zum Login
   function watchAccess(me) {
     let current = me;
+    const wasRo = isReadonly(me);
     const check = (p) => {
       const st = accessState(p);
       if (st !== 'ok') logoutTo('index.html?m=' + st);
+      else if (wasRo && !isReadonly(p)) location.reload();   // Zugang ist jetzt gestartet
     };
     setInterval(() => check(current), 15000);
     setInterval(async () => {
@@ -686,6 +714,7 @@
     // bare: Seite ohne Menü (z. B. die Vollbild-Uhr)
     if (opts.bare) { const m = $('content'); if (m) m.hidden = false; }
     else buildShell(me, opts.page);
+    if (isReadonly(me)) applyReadonly(me);
     watchAccess(me);
     return { me: me, sb: sb };
   }
