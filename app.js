@@ -64,7 +64,7 @@
     { id: 'protokoll', href: 'protokoll.html', label: 'Scan-Protokoll', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
     { id: 'drucken', href: 'drucken.html', label: 'Drucken / PDF', need: 'admin', group: 'Auswertung', icon: 'M6 2h9l5 5v15H6V2zm8 1.5V8h4.5L14 3.5zM8 12h8v2H8v-2zm0 4h8v2H8v-2z' },
     { id: 'benutzer', href: 'benutzer.html', label: 'Benutzer', need: 'admin', group: 'Verwaltung', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-4 0-8 2-8 5v1h16v-1c0-3-4-5-8-5z' },
-    { id: 'uhr', href: 'uhr.html', label: 'Vollbild-Uhr', short: 'Uhr', need: 'any', group: 'Heute', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z' },
+    { id: 'uhr', href: 'uhr.html', label: 'Vollbild-Uhr', short: 'Uhr', need: 'admin', group: 'Heute', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z' },
   ];
   const CAP_LABEL = { sell: 'Verkauf', scan: 'Einlass', campaigns: 'Aktionen', stations: 'Schicht' };
 

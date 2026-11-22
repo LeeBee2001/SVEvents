@@ -35,7 +35,7 @@
 
     <div class="tabs noprint" role="tablist">
       <button type="button" role="tab" data-tab="orders" aria-selected="true">Bestellungen</button>
-      <button type="button" role="tab" data-tab="classes" aria-selected="false">Klassenliste</button>
+      <button type="button" role="tab" data-tab="classes" aria-selected="false" id="classesTab" hidden>Klassenliste</button>
       <button type="button" role="tab" data-tab="manage" aria-selected="false" id="manageTab" hidden>Produkte und Einstellungen</button>
     </div>
 
@@ -58,7 +58,7 @@
         </form>
       </div>
 
-      <div class="section-head"><h2>Alle Bestellungen</h2></div>
+      <div class="section-head"><h2 id="orderListTitle">Alle Bestellungen</h2></div>
       <div class="toolbar">
         <div class="field"><label for="fSearch">Suche</label><input id="fSearch" type="search" placeholder="Empfänger oder Absender"></div>
         <div class="field"><label for="fClass">Klasse</label><select id="fClass"></select></div>
@@ -213,6 +213,9 @@
     $('campSel').innerHTML = campaigns.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('');
     if (campaigns.some((c) => c.id === saved)) $('campSel').value = saved;
     $('manageTab').hidden = !isAdmin;
+    $('classesTab').hidden = !isAdmin;
+    document.querySelector('.tabs').hidden = !isAdmin;
+    if (!isAdmin) { $('orderListTitle').textContent = 'Meine Bestellungen'; }
     await loadCampaign();
   }
 
@@ -236,8 +239,7 @@
     const win = [campaign.sale_start ? 'ab ' + fmt(campaign.sale_start) : '', campaign.sale_end ? 'bis ' + fmt(campaign.sale_end) : ''].filter(Boolean).join(' ');
     $('campInfo').textContent = [(campaign.description || '').replace(/[.\s]+$/, ''), win ? 'Bestellungen ' + win : ''].filter(Boolean).join('. ');
     renderOrdersTab();
-    renderClasses();
-    if (isAdmin) renderManage();
+    if (isAdmin) { renderClasses(); renderManage(); }
   }
 
   function renderOrdersTab() {

@@ -57,7 +57,7 @@
 <script>
 (async function () {
   // Interne Seite: nur mit Login, ohne Menü (bare). Jeder Mitarbeiter mit mindestens einem Recht darf sie sehen.
-  const ctx = await SV.start({ page: 'uhr', need: 'any', bare: true });
+  const ctx = await SV.start({ page: 'uhr', roles: ['admin'], bare: true });
   if (!ctx) return;
   const sb = ctx.sb;
   const $ = (id) => document.getElementById(id);
