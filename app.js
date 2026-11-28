@@ -183,6 +183,34 @@
     new window.QRCode(el, { text: text, width: size || 176, height: size || 176, correctLevel: window.QRCode.CorrectLevel.M });
   }
 
+  // Kamera-Scanner für Einlass, Token-Scanner und Kontrolle.
+  // Schnell und winkelunabhängig: nur QR-Codes suchen (statt aller Barcode-Arten), den ganzen Bildausschnitt auswerten
+  // (kein kleiner Suchrahmen), höhere Kamera-Auflösung und, wenn der Browser es kann, die eingebaute Erkennung des Handys.
+  // Klappt die verbesserte Einstellung nicht, startet automatisch die einfache Einstellung, die Kamera geht also immer.
+  async function startQrScanner(elId, onText) {
+    const QR = window.Html5QrcodeSupportedFormats ? [window.Html5QrcodeSupportedFormats.QR_CODE] : undefined;
+    const tries = [
+      { cfg: { formatsToSupport: QR, useBarCodeDetectorIfSupported: true, verbose: false },
+        start: { fps: 20, disableFlip: true, videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } } },
+      { cfg: { formatsToSupport: QR, verbose: false }, start: { fps: 12, disableFlip: true } },
+      { cfg: { verbose: false }, start: { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } } }
+    ];
+    let lastErr = null;
+    for (const tr of tries) {
+      const sc = new window.Html5Qrcode(elId, tr.cfg);
+      try {
+        await sc.start({ facingMode: 'environment' }, tr.start, onText, () => {});
+        return sc;
+      } catch (err) {
+        lastErr = err;
+        try { await sc.stop(); } catch (e) { /* egal */ }
+        try { sc.clear(); } catch (e) { /* egal */ }
+        if (err && /permission|denied|NotAllowed/i.test(String(err.name || err))) break;   // Zugriff verweigert: weitere Versuche sind sinnlos
+      }
+    }
+    throw lastErr || new Error('Kamera nicht verfügbar');
+  }
+
   function qrDataUrl(el) {
     const c = el.querySelector('canvas');
     return c ? c.toDataURL('image/png') : null;
@@ -893,7 +921,7 @@
   window.SV = {
     sb, $, $$, esc, fmt, fmtDay, fmtTime, money, toLocalInput, fromLocalInput, store,
     ROLE_LABEL, homeFor, toast, fail, errText, busy, confirmBox, wireDialog,
-    downloadCsv, renderQR, qrDataUrl, copyText, ticketHtml, showTicket, saveQrPng, ticketPng, themeOf, loadLogo, STYLES, saveTicketPng, masterPng, saveMasterPng, sendTicketMail,
+    downloadCsv, startQrScanner, renderQR, qrDataUrl, copyText, ticketHtml, showTicket, saveQrPng, ticketPng, themeOf, loadLogo, STYLES, saveTicketPng, masterPng, saveMasterPng, sendTicketMail,
     applyAccent, syncClock, serverNow, fmtT,
     sortEvents, loadEvents, fillEventSelect, accessState, start, initLogin
   };

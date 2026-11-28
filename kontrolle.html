@@ -124,9 +124,8 @@
 
   async function startCam() {
     if (scanner) return;
-    scanner = new Html5Qrcode('reader');
     try {
-      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } }, (t) => lookup(t), () => {});
+      scanner = await SV.startQrScanner('reader', (t) => lookup(t));
       $('camStart').hidden = true; $('camStop').hidden = false;
     } catch (err) { scanner = null; SV.toast('Die Kamera lässt sich nicht starten. Erlaube den Kamerazugriff in den Browser-Einstellungen.', 'bad'); }
   }
