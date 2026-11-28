@@ -184,22 +184,26 @@
   }
 
   // Kamera-Scanner für Einlass, Token-Scanner und Kontrolle.
-  // Schnell und winkelunabhängig: nur QR-Codes suchen (statt aller Barcode-Arten), den ganzen Bildausschnitt auswerten
-  // (kein kleiner Suchrahmen), höhere Kamera-Auflösung und, wenn der Browser es kann, die eingebaute Erkennung des Handys.
-  // Klappt die verbesserte Einstellung nicht, startet automatisch die einfache Einstellung, die Kamera geht also immer.
+  // 1. Versuch: quadratisches Bild mit Suchrahmen (groß, 80 % der Fläche). 2. Versuch: genau die frühere, bewährte Einstellung.
+  // Ein Versuch gilt nur, wenn die Kamera wirklich Bilder liefert (Wächter nach 4 s), sonst geht es automatisch zum nächsten.
   async function startQrScanner(elId, onText) {
-    const QR = window.Html5QrcodeSupportedFormats ? [window.Html5QrcodeSupportedFormats.QR_CODE] : undefined;
+    const box = (k) => (w, h) => { const s = Math.floor(Math.min(w, h) * k); return { width: s, height: s }; };
     const tries = [
-      { cfg: { formatsToSupport: QR, useBarCodeDetectorIfSupported: true, verbose: false },
-        start: { fps: 20, disableFlip: true, videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } } },
-      { cfg: { formatsToSupport: QR, verbose: false }, start: { fps: 12, disableFlip: true } },
-      { cfg: { verbose: false }, start: { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } } }
+      { aspectRatio: 1, fps: 10, qrbox: box(0.8) },
+      { fps: 10, qrbox: box(0.7) }
     ];
     let lastErr = null;
-    for (const tr of tries) {
-      const sc = new window.Html5Qrcode(elId, tr.cfg);
+    for (const cfg of tries) {
+      const sc = new window.Html5Qrcode(elId);
       try {
-        await sc.start({ facingMode: 'environment' }, tr.start, onText, () => {});
+        await sc.start({ facingMode: 'environment' }, cfg, onText, () => {});
+        let ok = false;
+        for (let k = 0; k < 16 && !ok; k++) {
+          const v = document.querySelector('#' + elId + ' video');
+          ok = !!(v && v.videoWidth > 0 && v.readyState >= 2);
+          if (!ok) await new Promise((r) => setTimeout(r, 250));
+        }
+        if (!ok) throw new Error('Kamera liefert kein Bild');
         return sc;
       } catch (err) {
         lastErr = err;
