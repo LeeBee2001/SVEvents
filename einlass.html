@@ -121,6 +121,8 @@
   let last = { token: '', at: 0 };
   let wake = null;
 
+  const isAdmin = me.role === 'admin';   // Gästeliste und Handeinlass nur für Admins
+  if (!isAdmin) { $('guestSec').hidden = true; $('guestSec').style.display = 'none'; }
   const direction = () => document.querySelector('input[name="dir"]:checked').value;
 
   async function loadStats() {
@@ -236,6 +238,7 @@
   // ---------- Gästeliste ----------
   let guests = [];
   async function loadGuests() {
+    if (!isAdmin) return;
     const r = await sb.rpc('guest_list', { p_event_id: $('eventSel').value });
     if (r.error) { $('guestList').innerHTML = '<p class="muted">Die Gästeliste konnte nicht geladen werden.</p>'; return; }
     guests = r.data || [];

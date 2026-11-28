@@ -19,6 +19,10 @@
   .tk-big { font-size: 44px; font-weight: 800; line-height: 1.05; margin: 6px 0; }
   .tk-sess { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; }
   #tkVerdict .v-guest { font-size: 24px; }
+  body.scan-full .scan-right { flex-direction: column; }
+  body.scan-full .tk-act { margin-top: 0; flex: none; }
+  body.scan-full #stInfo, body.scan-full #sess { display: none; }
+  .st-row { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -38,12 +42,19 @@
   <div id="main" hidden>
     <div class="toolbar">
       <div class="field"><label for="stSel">Station</label><select id="stSel"></select></div>
+      <div class="field"><button class="btn secondary" type="button" id="fsOn">Vollbild</button></div>
       <div class="field"><button class="btn secondary" type="button" id="sndBtn" aria-pressed="true">Ton: an</button></div>
     </div>
     <p class="muted small" id="stInfo"></p>
 
+    <div id="scanArea">
+    <div class="fs-bar">
+      <div class="fs-info"><b id="fsEvent"></b><span id="fsStat"></span></div>
+      <div class="fs-btns"><button class="btn secondary sm" type="button" id="sndBtn2" aria-pressed="true">Ton: an</button><button class="btn secondary sm" type="button" id="fsOff">Beenden</button></div>
+    </div>
     <div class="scan-grid">
       <div class="scan-left">
+        <div class="field st-row" id="stRow"></div>
         <div id="reader"></div>
         <div class="actions" style="margin-top:12px">
           <button class="btn" type="button" id="camStart">Kamera starten</button>
@@ -56,7 +67,6 @@
             <button class="btn secondary" type="submit">Prüfen</button>
           </form>
         </details>
-        <div class="tk-sess muted" style="margin-top:16px" id="sess"></div>
       </div>
       <div class="scan-right">
         <div id="tkVerdict" class="verdict idle" role="status" aria-live="assertive">
@@ -64,8 +74,11 @@
           <div class="v-sub">Kamera starten und den QR-Code des Tickets scannen.</div>
         </div>
         <div class="tk-act" id="tkAct" hidden></div>
+        <div id="scanNo" class="scan-no" hidden></div>
       </div>
     </div>
+    </div>
+    <div class="tk-sess muted" style="margin-top:16px" id="sess"></div>
   </div>
 </main>
 
@@ -82,7 +95,6 @@
   const q = new URLSearchParams(location.search);
 
   let stations = [], cur = null, scanner = null, working = false, wake = null;
-  let last = { token: '', at: 0 };
   let pending = null;              // Ticket, das noch kassiert werden muss
   let lastVisit = null;            // letzter Besuch (zum Zurücknehmen)
   let lastTicket = null;
@@ -92,7 +104,7 @@
   // ---------- Ton ----------
   let soundOn = true;
   try { soundOn = localStorage.getItem('sv_sound') !== 'off'; } catch (e) { /* egal */ }
-  const showSound = () => { $('sndBtn').textContent = 'Ton: ' + (soundOn ? 'an' : 'aus'); $('sndBtn').setAttribute('aria-pressed', String(soundOn)); };
+  const showSound = () => { ['sndBtn', 'sndBtn2'].forEach((id) => { $(id).textContent = 'Ton: ' + (soundOn ? 'an' : 'aus'); $(id).setAttribute('aria-pressed', String(soundOn)); }); };
   let audio = null;
   function ac() { try { if (!audio) { const A = window.AudioContext || window.webkitAudioContext; if (A) audio = new A(); } if (audio && audio.state === 'suspended') audio.resume(); } catch (e) { audio = null; } return audio; }
   function tone(a, f, s, d, type, v) { const o = a.createOscillator(), g = a.createGain(); o.type = type; o.frequency.value = f; const t0 = a.currentTime + s;
@@ -103,11 +115,22 @@
     else if (kind === 'warn') { tone(a, 520, 0, 0.14, 'triangle', 0.4); tone(a, 520, 0.22, 0.14, 'triangle', 0.4); }
     else { tone(a, 160, 0, 0.45, 'sawtooth', 0.3); }
   }
-  $('sndBtn').addEventListener('click', () => { soundOn = !soundOn; try { localStorage.setItem('sv_sound', soundOn ? 'on' : 'off'); } catch (e) { /* egal */ } showSound(); if (soundOn) beep('ok'); });
+  const toggleSound = () => { soundOn = !soundOn; try { localStorage.setItem('sv_sound', soundOn ? 'on' : 'off'); } catch (e) { /* egal */ } showSound(); if (soundOn) beep('ok'); };
+  $('sndBtn').addEventListener('click', toggleSound);
+  $('sndBtn2').addEventListener('click', toggleSound);
   showSound();
 
   // ---------- Anzeige ----------
+  let scanCount = 0, lastScanAt = 0;
+  function ago() {
+    if (!lastScanAt) return '';
+    const s = Math.round((Date.now() - lastScanAt) / 1000);
+    return s < 3 ? 'gerade eben' : s < 60 ? 'vor ' + s + ' s' : 'vor ' + Math.floor(s / 60) + ' min';
+  }
+  function showScanNo() { const el = $('scanNo'); el.hidden = !scanCount; el.textContent = 'Scan Nr. ' + scanCount + ' · ' + ago(); }
+  setInterval(showScanNo, 1000);
   function showSess() {
+    $('fsStat').textContent = sess.tokens + ' Tokens' + (sess.paid ? ' · ' + sess.paid + ' kassiert' : '');
     $('sess').innerHTML = '<span>Tokens abgezogen: <b>' + sess.tokens + '</b></span><span>Kassiert: <b>' + sess.paid + '</b> (' + SV.money(sess.sum) + ')</span>' + (sess.free ? '<span>Kostenlos: <b>' + sess.free + '</b></span>' : '') +
       '<span class="small">seit Öffnen der Seite</span>';
   }
@@ -131,6 +154,7 @@
     h += extra || '';
     el.innerHTML = h;
     el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+    scanCount++; lastScanAt = Date.now(); showScanNo();
     beep(kind);
     try { if (navigator.vibrate) navigator.vibrate(kind === 'ok' ? 80 : kind === 'warn' ? [90, 60, 90] : [300]); } catch (e) { /* iPhone */ }
   }
@@ -172,16 +196,29 @@
     refreshActions(); showSess();
   }
 
-  async function onCode(text) {
+  // Scan-Ablauf: Eine Kamera meldet denselben Code viele Male pro Sekunde. Darum zählt ein Code von der Kamera erst wieder,
+  // wenn er mindestens 1,5 Sekunden nicht mehr im Bild war. Von Hand eingegebene Codes zählen immer.
+  // Kommt während einer Abfrage ein anderer Code, wird er gemerkt und danach verarbeitet (nichts geht verloren).
+  let seen = { token: '', t: 0 }, queued = null;
+  async function onCode(text, fromCam) {
     const token = String(text || '').trim();
-    if (!token || working || !cur) return;
-    if (token === last.token && Date.now() - last.at < 2500) return;
+    if (!token || !cur) return;
+    if (fromCam) {
+      const now = Date.now();
+      const same = seen.token === token && now - seen.t < 1500;
+      seen = { token: token, t: now };
+      if (same) return;
+    }
+    if (working) { queued = token; return; }
     ac(); working = true;
-    const r = await sb.rpc('station_scan', { p_station: cur.id, p_token: token });
-    working = false;
-    last = { token: token, at: Date.now() };
-    if (r.error) { pending = null; setUndo(null); verdict({}, 'bad', SV.errText(r.error), ''); refreshActions(); }
-    else handle(r.data);
+    try {
+      const r = await sb.rpc('station_scan', { p_station: cur.id, p_token: token });
+      if (r.error) { pending = null; setUndo(null); verdict({}, 'bad', SV.errText(r.error), ''); refreshActions(); }
+      else handle(r.data);
+    } catch (err) {
+      verdict({}, 'bad', 'Keine Verbindung. Bitte nochmal scannen.', '');
+    } finally { working = false; }
+    if (queued) { const nxt = queued; queued = null; if (nxt !== token) onCode(nxt, false); }
   }
 
   document.addEventListener('click', async (e) => {
@@ -231,7 +268,7 @@
     if (scanner) return;
     scanner = new Html5Qrcode('reader');
     try {
-      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } }, (txt) => onCode(txt), () => {});
+      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } }, (txt) => onCode(txt, true), () => {});
       $('camStart').hidden = true; $('camStop').hidden = false; holdScreen();
     } catch (err) { scanner = null; SV.toast('Die Kamera lässt sich nicht starten. Erlaube den Kamerazugriff in den Browser-Einstellungen.', 'bad'); }
   }
@@ -244,12 +281,32 @@
   $('camStart').addEventListener('click', startCam);
   $('camStop').addEventListener('click', stopCam);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && scanner) holdScreen(); });
-  $('manualForm').addEventListener('submit', (e) => { e.preventDefault(); last = { token: '', at: 0 }; onCode($('manual').value); $('manual').value = ''; });
+  $('manualForm').addEventListener('submit', (e) => { e.preventDefault(); onCode($('manual').value, false); $('manual').value = ''; });
+
+  // ---------- Vollbild (wie am Einlass) ----------
+  let realFs = false;
+  async function fsEnter() {
+    document.body.classList.add('scan-full');
+    $('fsEvent').textContent = cur ? cur.name : '';
+    realFs = false;
+    try { if (document.documentElement.requestFullscreen) { await document.documentElement.requestFullscreen(); realFs = true; } } catch (e) { /* iPhone: Vollbild innerhalb der Seite */ }
+    if (!scanner) startCam();
+  }
+  async function fsLeave() {
+    document.body.classList.remove('scan-full');
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) { /* egal */ } }
+    realFs = false;
+  }
+  $('fsOn').addEventListener('click', fsEnter);
+  $('fsOff').addEventListener('click', fsLeave);
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && realFs) { realFs = false; document.body.classList.remove('scan-full'); } });
 
   // ---------- Station wählen ----------
   function showStation() {
     cur = stations.find((s) => s.id === $('stSel').value) || stations[0];
-    pending = null; lastTicket = null; setUndo(null); refreshActions();
+    pending = null; lastTicket = null; queued = null; setUndo(null); refreshActions();
+    $('stRow').textContent = cur.name + (cur.event_name ? ' · ' + cur.event_name : '');
+    $('fsEvent').textContent = cur.name;
     $('stInfo').textContent = (cur.event_name ? cur.event_name + ' · ' : '') + 'Preis nach den Tokens: ' + SV.money(cur.token_price);
     $('tkVerdict').className = 'verdict idle';
     $('tkVerdict').innerHTML = '<div class="v-title">Bereit</div><div class="v-sub">Kamera starten und den QR-Code des Tickets scannen.</div>';

@@ -50,10 +50,36 @@
   const sb = ctx.sb;
   const { esc, fmt, money, $ } = SV;
   let scanner = null, working = false, last = { token: '', at: 0 };
+  let curToken = '';
+  let cur = null;   // Admin-Infos zum angezeigten Ticket (Ticket-ID, Token-Stand je Station)
 
   const STATUS = { master: ['Master Key', 'ok'], outside: ['Draußen / noch nicht da', 'warn'], inside: ['Drin', 'ok'], cancelled: ['Storniert', 'bad'] };
   const RESULT = { ok: ['Gültig', 'ok'], already_inside: ['Schon drin', 'warn'], not_inside: ['Nicht drin', 'warn'], cancelled: ['Storniert', 'bad'], invalid: ['Ungültig', 'bad'], forbidden: ['Kein Zugriff', 'bad'], wrong_event: ['Anderes Event', 'bad'] };
   const SRC = { scan: 'Scan', manual: 'Von Hand', sale: 'Abendkasse' };
+
+  const VK = { token: 'Token', paid: 'Bezahlt' };
+  function adminBlock() {
+    if (!cur) return '';
+    let h = '';
+    if (cur.status !== 'cancelled') {
+      const inn = cur.status === 'inside';
+      h += '<section class="section"><div class="section-head"><h2>Einlass von Hand</h2></div>' +
+        '<p class="muted small">Der Status steht auf <b>' + (inn ? 'drin' : 'draußen') + '</b>. Das Umstellen steht im Protokoll als „Von Hand“.</p>' +
+        '<div class="actions"><button class="btn secondary" type="button" data-man="' + (inn ? 'out' : 'in') + '">' + (inn ? 'Als draußen eintragen' : 'Als drinnen eintragen') + '</button></div></section>';
+    }
+    if (cur.stations.length) {
+      h += '<section class="section"><div class="section-head"><h2>Tokens</h2></div><div class="tablewrap"><table class="data"><thead><tr><th>Station</th><th class="right">Übrig</th><th class="right">Verbraucht</th><th class="right">Bezahlt</th><th></th></tr></thead><tbody>' +
+        cur.stations.map((s) => '<tr><td>' + esc(s.name) + '</td><td class="right num"><b>' + s.state.remaining + '</b> von ' + s.state.total + '</td><td class="right num">' + s.state.used + '</td><td class="right num">' + s.state.paid + '</td>' +
+          '<td class="cell-actions"><button class="btn secondary sm" type="button" data-adj="1" data-st="' + s.station_id + '">+1</button> <button class="btn secondary sm" type="button" data-adj="-1" data-st="' + s.station_id + '">−1</button></td></tr>').join('') +
+        '</tbody></table></div></section>';
+    }
+    if (cur.visits.length) {
+      h += '<section class="section"><div class="section-head"><h2>Besuche an Stationen</h2></div><div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Station</th><th>Art</th><th>Von</th></tr></thead><tbody>' +
+        cur.visits.map((v) => '<tr><td class="nowrap">' + esc(fmt(v.at)) + '</td><td>' + esc(v.station) + '</td><td>' + esc(VK[v.kind] || v.kind) + (v.kind === 'paid' && Number(v.amount) ? ' · ' + esc(money(v.amount)) : '') + '</td><td>' + esc(v.by || '–') + '</td></tr>').join('') +
+        '</tbody></table></div></section>';
+    }
+    return h;
+  }
 
   function show(d) {
     if (!d.found) { $('out').innerHTML = '<div class="verdict v-bad"><div class="v-title">Kein Ticket mit diesem Code</div></div>'; return; }
@@ -71,6 +97,7 @@
       '<tr><td class="muted">Verkauft</td><td>' + esc(fmt(d.created_at)) + (d.sold_by ? ' von ' + esc(d.sold_by) : '') + '</td></tr>' +
       '<tr><td class="muted">E-Mail</td><td>' + (d.guest_email ? esc(d.guest_email) + (d.mail_sent_at ? ' · gesendet ' + esc(fmt(d.mail_sent_at)) : ' · noch nicht gesendet') : '<span class="muted">keine</span>') + '</td></tr>' +
       '</tbody></table></div>') +
+      adminBlock() +
       '<section class="section"><div class="section-head"><h2>Scan-Historie</h2></div>' +
       (hist.length ? '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gerät</th><th>Von</th></tr></thead><tbody>' +
         hist.map((h) => { const r = RESULT[h.result] || [h.result, '']; return '<tr><td class="nowrap">' + esc(fmt(h.at)) + '</td><td>' + (h.direction === 'in' ? 'Eingang' : 'Ausgang') + '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + esc(SRC[h.source] || h.source) + '</td><td>' + esc(h.device || '–') + '</td><td>' + esc(h.by || '') + '</td></tr>'; }).join('') +
@@ -82,12 +109,17 @@
     const token = String(text || '').trim();
     if (!token || working) return;
     if (token === last.token && Date.now() - last.at < 2500) return;
-    working = true;
+    working = true; curToken = token;
     const r = await sb.rpc('ticket_inspect', { p_token: token });
+    let info = null;
+    if (!r.error && r.data && r.data.found && !r.data.master) {
+      const a = await sb.rpc('ticket_admin_info', { p_token: token });
+      if (!a.error && a.data && a.data.found) info = a.data;
+    }
     working = false;
     last = { token: token, at: Date.now() };
     if (r.error) return SV.fail(r.error);
-    show(r.data);
+    cur = info; show(r.data);
   }
 
   async function startCam() {
@@ -103,6 +135,27 @@
     try { await scanner.stop(); scanner.clear(); } catch (e) { /* egal */ }
     scanner = null; $('camStart').hidden = false; $('camStop').hidden = true;
   }
+  $('out').addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b || !cur || !curToken) return;
+    try {
+      if (b.dataset.man) {
+        await SV.busy(b, async () => {
+          const r = await sb.rpc('manual_scan', { p_ticket_id: cur.ticket_id, p_direction: b.dataset.man, p_event_id: cur.event_id, p_device: 'Kontrolle' });
+          if (r.error) return SV.fail(r.error);
+          SV.toast(r.data.message || 'Eingetragen', r.data.result === 'ok' ? undefined : 'bad');
+          last = { token: '', at: 0 }; await lookup(curToken);
+        });
+      } else if (b.dataset.adj) {
+        await SV.busy(b, async () => {
+          const r = await sb.rpc('station_token_adjust', { p_station: b.dataset.st, p_ticket: cur.ticket_id, p_delta: parseInt(b.dataset.adj, 10) });
+          if (r.error) return SV.fail(r.error);
+          SV.toast('Tokens angepasst: jetzt ' + r.data.remaining + ' von ' + r.data.total);
+          last = { token: '', at: 0 }; await lookup(curToken);
+        });
+      }
+    } catch (err) { SV.fail(err); }
+  });
   $('camStart').addEventListener('click', startCam);
   $('camStop').addEventListener('click', stopCam);
   $('manualForm').addEventListener('submit', (e) => { e.preventDefault(); lookup($('manualCode').value); });
