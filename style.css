@@ -329,6 +329,7 @@ dialog > form, dialog > .dlg { display: flex; flex-direction: column; max-height
 .verdict .v-sub { font-size: 15px; opacity: 0.9; }
 .verdict.idle { color: var(--muted); }
 .verdict.v-ok { background: #15803d; border: 0; }
+.verdict.v-ok.v-master { background: #8f6f26; }
 .verdict.v-warn { background: #b45309; border: 0; }
 .verdict.v-bad { background: #b91c1c; border: 0; }
 #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 8px; overflow: hidden; }

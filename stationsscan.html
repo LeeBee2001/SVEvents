@@ -150,7 +150,11 @@
 
   function handle(r) {
     pending = null; lastTicket = r.ticket_id ? r : null;
-    if (r.result === 'ok') {
+    if (r.result === 'ok' && r.master) {
+      setUndo(null);
+      verdict(r, 'ok', r.message, '<div class="tk-big">∞</div><div class="v-sub">Tokens unbegrenzt, nichts abgezogen</div>');
+      $('tkVerdict').classList.add('v-master');
+    } else if (r.result === 'ok') {
       sess.tokens++; setUndo(r.visit_id);
       verdict(r, 'ok', r.message, tokenLine(r));
     } else if (r.result === 'pay') {

@@ -58,7 +58,7 @@
 
   async function load() {
     const r = await sb.from('scan_log')
-      .select('id, direction, result, source, device, scanned_at, tickets(guest_name, event_id, events(name)), profiles(name)')
+      .select('id, master_key_id, direction, result, source, device, scanned_at, tickets(guest_name, event_id, events(name)), profiles(name)')
       .order('scanned_at', { ascending: false }).limit(300);
     if (r.error) throw r.error;
     rows = r.data;
@@ -85,7 +85,7 @@
     $('table').innerHTML = '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Gast</th><th>Event</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gerät</th><th>Gescannt von</th></tr></thead><tbody>' +
       list.map((l) => {
         const r = RESULT[l.result] || [l.result, ''];
-        return '<tr><td class="nowrap">' + esc(fmt(l.scanned_at)) + '</td><td>' + esc(l.tickets ? l.tickets.guest_name : '–') + '</td><td>' +
+        return '<tr><td class="nowrap">' + esc(fmt(l.scanned_at)) + '</td><td>' + esc(l.tickets ? l.tickets.guest_name : (l.master_key_id ? 'Master Key' : '–')) + '</td><td>' +
           esc(l.tickets && l.tickets.events ? l.tickets.events.name : '–') + '</td><td>' + (l.direction === 'in' ? 'Eingang' : 'Ausgang') +
           '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + (l.source === 'manual' ? 'Von Hand' : l.source === 'sale' ? 'Abendkasse' : 'Scan') + '</td><td>' + esc(l.device || '–') + '</td><td>' + esc(l.profiles ? l.profiles.name : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>';

@@ -89,6 +89,23 @@
   </form>
 </dialog>
 
+<dialog id="masterDlg">
+  <div class="dlg">
+    <div class="dlg-head"><h2>Master Key</h2></div>
+    <div class="dlg-body">
+      <p class="muted">Ein Schlüssel für das ganze Event: Er lässt sich unbegrenzt oft ein- und ausscannen, zählt nicht zum Gäste-Limit, taucht nicht im Verkauf oder in den Statistiken auf und hat an jeder Token-Station unendlich viele Tokens.</p>
+      <div class="prev-wrap"><canvas id="mkPrev" width="1200" height="520" aria-label="Vorschau des Master Keys"></canvas></div>
+      <div class="hint">Nur Admins sehen diese Karte. Wer das Bild hat, kommt überall rein. Gib es nur an Personen, denen du vertraust. Ging es verloren, erzeuge einen neuen Code. Der alte funktioniert dann sofort nicht mehr.</div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn secondary" type="button" id="mkNew">Neuen Code erzeugen</button>
+      <button class="btn secondary" type="button" id="mkPrint">Drucken</button>
+      <button class="btn secondary" type="button" id="mkSave">Als Bild speichern</button>
+      <button class="btn" type="button" data-close>Schließen</button>
+    </div>
+  </div>
+</dialog>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
@@ -129,7 +146,8 @@
       const meta = [fmt(ev.starts_at) || 'Kein Datum', ev.location, 'Limit ' + ev.capacity].filter(Boolean).map(esc).join(', ');
       return '<section class="section">' +
         '<div class="section-head"><div><h2>' + (ev.logo_url ? '<img class="ev-logo" src="' + esc(ev.logo_url) + '" alt="" loading="lazy"> ' : '') + (ev.accent ? '<span class="swatch" style="background:' + esc(ev.accent) + '"></span>' : '') + (ev.accent2 ? '<span class="swatch" style="background:' + esc(ev.accent2) + ';margin-left:-4px"></span>' : '') + esc(ev.name) + '</h2><div class="muted small">' + meta + '</div></div>' +
-        '<div class="actions"><button class="btn secondary sm" data-act="edit-ev" data-id="' + ev.id + '">Bearbeiten</button>' +
+        '<div class="actions"><button class="btn secondary sm" data-act="master" data-id="' + ev.id + '">Master Key</button>' +
+        '<button class="btn secondary sm" data-act="edit-ev" data-id="' + ev.id + '">Bearbeiten</button>' +
         '<button class="btn secondary sm" data-act="del-ev" data-id="' + ev.id + '">Löschen</button></div></div>' +
         (ts.length
           ? '<div class="tablewrap"><table class="data"><thead><tr><th>Ticketart</th><th class="right">Preis</th><th>Verkauf</th><th class="right">Limit</th><th>Besonderheiten</th><th></th></tr></thead><tbody>' +
@@ -292,6 +310,44 @@
     });
   });
 
+
+  // ---------- Master Key ----------
+  let mk = null; // { ev, token }
+  async function drawMaster() {
+    const logo = mk.ev.logo_url ? await SV.loadLogo(mk.ev.logo_url) : null;
+    const th = SV.themeOf(mk.ev, logo);
+    const c = SV.masterPng({ token: mk.token, event: mk.ev.name, theme: th });
+    const p = $('mkPrev'); p.getContext('2d').drawImage(c, 0, 0);
+  }
+  async function openMaster(ev) {
+    const r = await sb.from('master_keys').select('token').eq('event_id', ev.id).maybeSingle();
+    if (r.error) throw r.error;
+    let token = r.data && r.data.token;
+    if (!token) { const n = await sb.rpc('master_key_rotate', { p_event_id: ev.id }); if (n.error) throw n.error; token = n.data; }
+    mk = { ev: ev, token: token };
+    await drawMaster();
+    $('masterDlg').showModal();
+  }
+  $('mkSave').addEventListener('click', () => SV.saveMasterPng({ token: mk.token, event: mk.ev.name, theme: SV.themeOf(mk.ev, null) }));
+  $('mkPrint').addEventListener('click', () => {
+    const url = $('mkPrev').toDataURL('image/png');
+    const w = window.open('', '_blank');
+    if (!w) return SV.toast('Das Druckfenster wurde blockiert', 'bad');
+    w.document.write('<!doctype html><title>Master Key</title><style>@page{size:landscape;margin:12mm}body{margin:0}img{width:100%;max-width:277mm}</style><img src="' + url + '">');
+    w.document.close();
+    w.onload = () => { w.focus(); w.print(); };
+  });
+  $('mkNew').addEventListener('click', async () => {
+    const ok = await SV.confirmBox('Der bisherige Master Key von „' + mk.ev.name + '“ funktioniert danach nicht mehr. Bereits verteilte Bilder und Ausdrucke sind ungültig.',
+      { title: 'Neuen Code erzeugen?', ok: 'Neu erzeugen', danger: true });
+    if (!ok) return;
+    try {
+      const n = await SV.busy($('mkNew'), () => sb.rpc('master_key_rotate', { p_event_id: mk.ev.id }));
+      if (n.error) return SV.fail(n.error);
+      mk.token = n.data; await drawMaster(); SV.toast('Neuer Master Key erzeugt');
+    } catch (err) { SV.fail(err); }
+  });
+
   // ---------- Klicks in der Liste ----------
   $('list').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]');
@@ -299,6 +355,7 @@
     const id = b.dataset.id;
     try {
       if (b.dataset.act === 'edit-ev') openEvent(events.find((x) => x.id === id));
+      if (b.dataset.act === 'master') await openMaster(events.find((x) => x.id === id));
       if (b.dataset.act === 'add-ty') openType(id, null);
       if (b.dataset.act === 'edit-ty') { const t = types.find((x) => x.id === id); openType(t.event_id, t); }
       if (b.dataset.act === 'del-ev') {

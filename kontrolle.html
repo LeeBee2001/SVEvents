@@ -51,7 +51,7 @@
   const { esc, fmt, money, $ } = SV;
   let scanner = null, working = false, last = { token: '', at: 0 };
 
-  const STATUS = { outside: ['Draußen / noch nicht da', 'warn'], inside: ['Drin', 'ok'], cancelled: ['Storniert', 'bad'] };
+  const STATUS = { master: ['Master Key', 'ok'], outside: ['Draußen / noch nicht da', 'warn'], inside: ['Drin', 'ok'], cancelled: ['Storniert', 'bad'] };
   const RESULT = { ok: ['Gültig', 'ok'], already_inside: ['Schon drin', 'warn'], not_inside: ['Nicht drin', 'warn'], cancelled: ['Storniert', 'bad'], invalid: ['Ungültig', 'bad'], forbidden: ['Kein Zugriff', 'bad'], wrong_event: ['Anderes Event', 'bad'] };
   const SRC = { scan: 'Scan', manual: 'Von Hand', sale: 'Abendkasse' };
 
@@ -59,17 +59,18 @@
     if (!d.found) { $('out').innerHTML = '<div class="verdict v-bad"><div class="v-title">Kein Ticket mit diesem Code</div></div>'; return; }
     const st = STATUS[d.status] || [d.status, ''];
     const kind = st[1];
+    const isMaster = d.master === true;
     const price = d.price_paid != null ? money(d.price_paid) : money(d.type_price);
     const hist = d.history || [];
     $('out').innerHTML =
-      '<div class="verdict v-' + kind + '"><div class="v-title">' + esc(st[0]) + '</div>' +
-      '<div class="v-guest">' + esc(d.guest_name) + (d.guest_class ? ', ' + esc(d.guest_class) : '') + '</div>' +
+      '<div class="verdict v-' + kind + (isMaster ? ' v-master' : '') + '"><div class="v-title">' + esc(st[0]) + '</div>' +
+      (isMaster ? '' : '<div class="v-guest">' + esc(d.guest_name) + (d.guest_class ? ', ' + esc(d.guest_class) : '') + '</div>') +
       '<div class="v-sub">' + esc(d.type_name) + ' · ' + esc(d.event_name) + '</div></div>' +
-      '<div class="tablewrap" style="margin-top:14px"><table class="data"><tbody>' +
+      (isMaster ? '' : '<div class="tablewrap" style="margin-top:14px"><table class="data"><tbody>' +
       '<tr><td class="muted">Bezahlt</td><td>' + esc(price) + (d.discount_code ? ' <span class="badge accent">Code ' + esc(d.discount_code) + ' (−' + esc(money(d.discount_amount)) + ')</span>' : '') + '</td></tr>' +
       '<tr><td class="muted">Verkauft</td><td>' + esc(fmt(d.created_at)) + (d.sold_by ? ' von ' + esc(d.sold_by) : '') + '</td></tr>' +
       '<tr><td class="muted">E-Mail</td><td>' + (d.guest_email ? esc(d.guest_email) + (d.mail_sent_at ? ' · gesendet ' + esc(fmt(d.mail_sent_at)) : ' · noch nicht gesendet') : '<span class="muted">keine</span>') + '</td></tr>' +
-      '</tbody></table></div>' +
+      '</tbody></table></div>') +
       '<section class="section"><div class="section-head"><h2>Scan-Historie</h2></div>' +
       (hist.length ? '<div class="tablewrap"><table class="data"><thead><tr><th>Zeit</th><th>Richtung</th><th>Ergebnis</th><th>Art</th><th>Gerät</th><th>Von</th></tr></thead><tbody>' +
         hist.map((h) => { const r = RESULT[h.result] || [h.result, '']; return '<tr><td class="nowrap">' + esc(fmt(h.at)) + '</td><td>' + (h.direction === 'in' ? 'Eingang' : 'Ausgang') + '</td><td><span class="badge ' + r[1] + '">' + esc(r[0]) + '</span></td><td>' + esc(SRC[h.source] || h.source) + '</td><td>' + esc(h.device || '–') + '</td><td>' + esc(h.by || '') + '</td></tr>'; }).join('') +

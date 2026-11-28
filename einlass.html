@@ -205,7 +205,7 @@
   function verdict(r) {
     const kind = r.result === 'ok' ? 'ok' : (r.result === 'already_inside' || r.result === 'not_inside') ? 'warn' : 'bad';
     const el = $('verdict');
-    el.className = 'verdict v-' + kind;
+    el.className = 'verdict v-' + kind + (r.master ? ' v-master' : '');
     let html = '<div class="v-title">' + esc(r.message || r.result) + '</div>';
     if (r.guest_name) {
       html += '<div class="v-guest">' + esc(r.guest_name) + (r.guest_class ? ', ' + esc(r.guest_class) : '') + '</div>';

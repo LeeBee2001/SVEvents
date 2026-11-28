@@ -410,6 +410,114 @@
     return c;
   }
 
+
+  // ---------- Master Key: schlichtes Gold-Ticket, gleicher Aufbau wie ticketPng() ----------
+  // t: { token, event, theme? }. Das Design folgt dem Ticket-Stil des Events, die Farbe ist immer Gold.
+  function masterPng(t) {
+    const th = t.theme || themeByEvent[t.event] || themeOf(null);
+    const style = th.style;
+    const W = 1200, H = 520, PAD = 36;
+    const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+    const GOLD = '#b8924a', GOLD_LIGHT = '#d9bb7a', GOLD_INK = '#2b2111';
+    const dark = style === 'elegant';
+    const P = dark
+      ? { page: '#0a0b0f', card: '#14161c', line: '#2a2e38', muted: '#a3aab8', text: '#f4f5f7', tear: '#3a3f4b', mono: '#7c8494' }
+      : { page: '#eef0f4', card: '#ffffff', line: '#dcdfe5', muted: '#5b6270', text: '#15171c', tear: '#c9cdd6', mono: '#8a91a0' };
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const rr = (x, y, w, h, r) => { g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+    const wrap1 = (text, font, mw) => {
+      g.font = font;
+      let s = String(text || '');
+      while (s.length > 1 && g.measureText(s).width > mw) s = s.slice(0, -1);
+      return s === String(text || '') ? s : s.trim() + '…';
+    };
+    // Schlüssel-Symbol im Stil von SF Symbols (key.fill): runder Kopf mit Loch, gerader Schaft, zwei Zähne.
+    // (x, y) = Mittelpunkt des Kopfes, Schaft zeigt nach rechts, s = Größe des Kopfdurchmessers.
+    const keyIcon = (x, y, s, fill) => {
+      const r = s / 2, sh = s * 0.2, len = s * 2.1;
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI * 2);
+      g.moveTo(x + r * 0.42 + r * 0.01, y); g.arc(x, y, r * 0.38, 0, Math.PI * 2, true);
+      g.fillStyle = fill; g.fill('evenodd');
+      rr(x + r * 0.7, y - sh / 2, len, sh, sh / 2); g.fill();
+      rr(x + r * 0.7 + len * 0.62, y, sh * 0.95, s * 0.36, sh * 0.3); g.fill();
+      rr(x + r * 0.7 + len * 0.86, y, sh * 0.95, s * 0.28, sh * 0.3); g.fill();
+    };
+
+    g.fillStyle = P.page; g.fillRect(0, 0, W, H);
+    const cx = PAD, cy = PAD, cw = W - 2 * PAD, ch = H - 2 * PAD;
+    const stubW = 380, sx = cx + cw - stubW;
+    rr(cx, cy, cw, ch, 28); g.fillStyle = P.card; g.fill();
+
+    let ink = P.text, sub = P.muted, headerH = 0;
+    g.save(); rr(cx, cy, cw, ch, 28); g.clip();
+    if (style === 'modern') {
+      headerH = 118; g.fillStyle = GOLD; g.fillRect(cx, cy, cw, headerH);
+    } else if (style === 'strip') {
+      g.fillStyle = GOLD; g.fillRect(cx, cy, sx - cx, ch); ink = GOLD_INK; sub = GOLD_INK;
+    } else if (style === 'elegant') {
+      g.fillStyle = GOLD; g.fillRect(cx, cy, 10, ch);
+    }
+    g.restore();
+    g.lineWidth = 2; g.strokeStyle = P.line; rr(cx, cy, cw, ch, 28); g.stroke();
+
+    g.save(); g.setLineDash([10, 10]); g.lineWidth = 3; g.strokeStyle = P.tear;
+    g.beginPath(); g.moveTo(sx, cy + 24); g.lineTo(sx, cy + ch - 24); g.stroke(); g.restore();
+    [cy, cy + ch].forEach((y) => { g.beginPath(); g.arc(sx, y, 22, 0, Math.PI * 2); g.fillStyle = P.page; g.fill(); });
+
+    const left = cx + 52 + (dark ? 8 : 0), maxW = sx - left - 40;
+    g.textBaseline = 'alphabetic';
+    let evBase = cy + 88, nameBase = cy + 200;
+    if (style === 'modern') {
+      g.fillStyle = GOLD_INK; g.font = '700 38px ' + FONT;
+      g.fillText(wrap1(t.event, '700 38px ' + FONT, maxW - 90), left, cy + headerH / 2 + 14);
+      keyIcon(sx - 190, cy + headerH / 2, 40, GOLD_INK);
+      nameBase = cy + headerH + 110;
+    } else {
+      g.fillStyle = dark ? GOLD_LIGHT : sub; g.font = '500 30px ' + FONT;
+      g.fillText(wrap1(t.event, '500 30px ' + FONT, maxW), left, evBase);
+    }
+    g.fillStyle = ink; g.font = '700 74px ' + FONT;
+    g.fillText('Master Key', left, nameBase);
+    if (style !== 'modern') keyIcon(left + 22, cy + ch - 84, 46, dark ? GOLD_LIGHT : (style === 'strip' ? GOLD_INK : GOLD));
+
+    // QR-Code rechts, wie beim normalen Ticket
+    const tmp = document.createElement('div');
+    tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(tmp);
+    renderQR(tmp, t.token, 400);
+    const qc = tmp.querySelector('canvas');
+    const qs = 268, qx = sx + (stubW - qs) / 2, qy = cy + (ch - qs) / 2 - 20;
+    if (qc) {
+      g.fillStyle = '#ffffff'; rr(qx - 14, qy - 14, qs + 28, qs + 28, 12); g.fill();
+      g.strokeStyle = P.line; g.lineWidth = 2; g.stroke();
+      g.imageSmoothingEnabled = false;
+      g.drawImage(qc, qx, qy, qs, qs);
+    }
+    document.body.removeChild(tmp);
+    g.fillStyle = P.mono; g.font = '500 15px ui-monospace, Menlo, Consolas, monospace'; g.textAlign = 'center';
+    const tok = String(t.token || '');
+    g.fillText(tok.slice(0, 17), sx + stubW / 2, qy + qs + 52);
+    g.fillText(tok.slice(17), sx + stubW / 2, qy + qs + 74);
+    g.textAlign = 'left';
+    return c;
+  }
+
+  function saveMasterPng(t) {
+    let c;
+    try { c = masterPng(t); } catch (e) { toast('Der Master Key konnte nicht erstellt werden', 'bad'); return; }
+    c.toBlob((b) => {
+      if (!b) { toast('Der Master Key konnte nicht gespeichert werden', 'bad'); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = 'master-key-' + String(t.event || 'event').replace(/[^\wäöüÄÖÜß-]+/g, '_') + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    }, 'image/png');
+  }
+
   function saveTicketPng(t) {
     let c;
     try { c = ticketPng(t); } catch (e) { toast('Das Ticket konnte nicht erstellt werden', 'bad'); return; }
@@ -773,7 +881,7 @@
   window.SV = {
     sb, $, $$, esc, fmt, fmtDay, fmtTime, money, toLocalInput, fromLocalInput, store,
     ROLE_LABEL, homeFor, toast, fail, errText, busy, confirmBox, wireDialog,
-    downloadCsv, renderQR, qrDataUrl, copyText, ticketHtml, showTicket, saveQrPng, ticketPng, themeOf, loadLogo, STYLES, saveTicketPng, sendTicketMail,
+    downloadCsv, renderQR, qrDataUrl, copyText, ticketHtml, showTicket, saveQrPng, ticketPng, themeOf, loadLogo, STYLES, saveTicketPng, masterPng, saveMasterPng, sendTicketMail,
     applyAccent, syncClock, serverNow, fmtT,
     sortEvents, loadEvents, fillEventSelect, accessState, start, initLogin
   };
