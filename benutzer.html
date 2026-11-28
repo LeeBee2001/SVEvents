@@ -19,7 +19,7 @@
       <h1>Benutzer</h1>
       <p class="muted">Wer darf wann was verkaufen, scannen oder verwalten.</p>
     </div>
-    <div class="actions"><button class="btn" type="button" id="newUser">Neuer Benutzer</button></div>
+    <div class="actions"><a class="btn secondary" href="benutzer-mehrere.html">Mehrere anlegen</a><button class="btn" type="button" id="newUser">Neuer Benutzer</button></div>
   </div>
   <div id="table"></div>
 </main>
@@ -53,6 +53,7 @@
         </div>
       </div>
       <div id="uWindow">
+        <div class="field" id="uSlotRow" hidden><label for="uSlot">Zeitfenster-Vorlage</label><select id="uSlot"></select></div>
         <div class="grid-2">
           <div class="field"><label for="uFrom">Gültig ab</label><input id="uFrom" type="datetime-local"></div>
           <div class="field"><label for="uUntil">Gültig bis</label><input id="uUntil" type="datetime-local"></div>
@@ -117,7 +118,7 @@
   const { $, esc, fmt, fmtDay, money } = SV;
 
   let profiles = [], events = [], types = [], campaigns = [], evAcc = [], tyAcc = [], caAcc = [];
-  let editing = null;
+  let editing = null, slots = [];
   let sel = { types: new Set(), events: new Set(), campaigns: new Set() };
   let emailTouched = false;   // wurde die E-Mail von Hand geändert?
 
@@ -165,8 +166,10 @@
       sb.from('campaigns').select('*').order('created_at', { ascending: false }),
       sb.from('event_access').select('*'),
       sb.from('type_access').select('*'),
-      sb.from('campaign_access').select('*')
+      sb.from('campaign_access').select('*'),
+      sb.from('time_slots').select('*').order('starts_at')
     ]);
+    slots = res[7].error ? [] : res[7].data;   // Vorlagen sind optional (21_vorlagen.sql)
     [res[0], res[2], res[3], res[4], res[5], res[6]].forEach((r) => { if (r.error) throw r.error; });
     profiles = res[0].data; events = res[1]; types = res[2].data; campaigns = res[3].data;
     evAcc = res[4].data; tyAcc = res[5].data; caAcc = res[6].data;
@@ -262,6 +265,10 @@
     renderAssign();
   }
   $('uRole').addEventListener('change', syncRole);
+  $('uSlot').addEventListener('change', () => {
+    const s = slots.find((x) => x.id === $('uSlot').value);
+    if (s) { $('uFrom').value = SV.toLocalInput(s.starts_at); $('uUntil').value = SV.toLocalInput(s.ends_at); }
+  });
 
   // ---------- Dialog öffnen ----------
   function openUser(p) {
@@ -285,6 +292,8 @@
     $('uActive').disabled = self;
     $('uFrom').value = p ? SV.toLocalInput(p.valid_from) : '';
     $('uUntil').value = p ? SV.toLocalInput(p.valid_until) : '';
+    $('uSlotRow').hidden = !slots.length;
+    $('uSlot').innerHTML = '<option value="">Eigene Zeiten</option>' + slots.map((s) => '<option value="' + s.id + '">' + esc(s.name) + ' (' + esc(fmt(s.starts_at)) + ' – ' + esc(SV.fmtTime(s.ends_at)) + ')</option>').join('');
     $('uPwChange').hidden = !p;
     $('uDelete').hidden = !p || self;
     sel = p ? {

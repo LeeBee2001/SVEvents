@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Benachrichtigungen – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+<style>
+  .push-state { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .push-state .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+  .push-state.on .dot { background: #1f9d55; }
+  .push-state.bad .dot { background: #d64545; }
+  .dev { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--surface); margin-bottom: 8px; }
+  .dev .grow { flex: 1; min-width: 0; }
+</style>
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head">
+    <div>
+      <h1>Benachrichtigungen</h1>
+      <p class="muted">Bekomme eine Push-Nachricht aufs Handy, wenn etwas passiert. Das gilt nur für dieses Gerät.</p>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:18px">
+    <div class="push-state" id="state"><span class="dot"></span><b id="stateTxt">Wird geprüft …</b></div>
+    <p class="hint" id="stateHint" style="margin:8px 0 14px"></p>
+    <div style="display:flex; gap:8px; flex-wrap:wrap">
+      <button class="btn" type="button" id="onBtn" hidden>Auf diesem Gerät aktivieren</button>
+      <button class="btn secondary" type="button" id="testBtn" hidden>Test-Nachricht senden</button>
+      <button class="btn secondary" type="button" id="offBtn" hidden>Auf diesem Gerät ausschalten</button>
+    </div>
+  </div>
+
+  <div class="panel" id="prefPanel" style="margin-bottom:18px" hidden>
+    <h2 style="margin-bottom:10px">Wann soll dieses Gerät piepen?</h2>
+    <label class="check"><input type="checkbox" id="pReports"> Neue Meldung einer Station</label>
+    <label class="check"><input type="checkbox" id="pRejects"> Abgelehnter Scan (ungültig, schon drin, storniert …)</label>
+    <label class="check"><input type="checkbox" id="pCancels"> Ticket storniert</label>
+    <p class="hint">Wenn du selbst etwas auslöst (z. B. selbst ein Ticket stornierst), bekommst du dafür keine Nachricht.</p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-bottom:10px">Deine Geräte</h2>
+    <div id="devs"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'push', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc } = SV;
+
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const deviceLabel = () => (isIOS ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'Gerät') +
+    (standalone ? ' (App)' : ' (Browser)');
+
+  let mySub = null;       // Abo dieses Geräts (Zeile aus push_subscriptions)
+  let browserSub = null;  // PushSubscription des Browsers
+  let reg = null;
+  let blocked = false;    // Gerät kann (noch) kein Push: keine Knöpfe zeigen
+
+  function b64ToBytes(s) {
+    const pad = '='.repeat((4 - (s.length % 4)) % 4);
+    const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+  function bytesToB64Url(buf) {
+    let s = ''; new Uint8Array(buf).forEach((b) => { s += String.fromCharCode(b); });
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  async function callFn(body) {
+    const r = await sb.functions.invoke('push-notify', { body: body });
+    let msg = r.error ? (r.error.message || '') : (r.data && r.data.error) || '';
+    if (r.error) { try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ } }
+    if (/Failed to send|not found|relay/i.test(msg)) msg = 'Die Funktion „push-notify“ ist nicht erreichbar. Wurde sie in Supabase eingerichtet?';
+    if (msg) throw new Error(msg);
+    return r.data;
+  }
+
+  function setState(kind, txt, hint) {
+    $('state').className = 'push-state ' + kind;
+    $('stateTxt').textContent = txt;
+    $('stateHint').textContent = hint || '';
+  }
+
+  async function refresh() {
+    const all = await sb.from('push_subscriptions').select('*').order('created_at');
+    if (all.error) { SV.fail(all.error); return; }
+    mySub = null;
+    if (supported && reg) {
+      browserSub = await reg.pushManager.getSubscription();
+      if (browserSub) mySub = all.data.find((d) => d.endpoint === browserSub.endpoint) || null;
+    }
+    $('devs').innerHTML = all.data.length ? all.data.map((d) =>
+      '<div class="dev"><div class="grow"><b>' + esc(d.label || 'Gerät') + '</b>' + (mySub && d.id === mySub.id ? ' <span class="badge">dieses Gerät</span>' : '') +
+      '<div class="muted small">seit ' + esc(SV.fmt(d.created_at)) + '</div></div>' +
+      '<button class="btn secondary sm" type="button" data-rm="' + d.id + '">Entfernen</button></div>').join('')
+      : '<p class="muted small">Noch kein Gerät aktiviert.</p>';
+
+    if (blocked) return;
+    const on = !!mySub && Notification.permission === 'granted';
+    $('onBtn').hidden = on; $('testBtn').hidden = !on; $('offBtn').hidden = !on; $('prefPanel').hidden = !on;
+    if (on) {
+      $('pReports').checked = mySub.on_reports; $('pRejects').checked = mySub.on_rejects; $('pCancels').checked = mySub.on_cancels;
+      setState('on', 'Auf diesem Gerät aktiv', 'Du bekommst Nachrichten, auch wenn die App geschlossen ist.');
+    }
+  }
+
+  if (!supported) {
+    blocked = true;
+    setState('bad', 'Dieses Gerät kann keine Push-Nachrichten',
+      isIOS ? 'Auf dem iPhone/iPad geht Push nur, wenn SVEvents auf dem Home-Bildschirm liegt: In Safari auf „Teilen“ → „Zum Home-Bildschirm“, dann die App von dort öffnen (iOS 16.4 oder neuer).'
+            : 'Dieser Browser unterstützt keine Push-Nachrichten. Nimm Chrome, Edge oder Firefox.');
+    await refresh().catch(() => {});
+    return;
+  }
+  if (isIOS && !standalone) {
+    blocked = true;
+    setState('bad', 'Erst als App installieren', 'Auf dem iPhone/iPad geht Push nur in der installierten App: In Safari auf „Teilen“ → „Zum Home-Bildschirm“, dann die App von dort öffnen und diese Seite noch einmal aufrufen.');
+    await refresh().catch(() => {});
+    return;
+  }
+
+  try { reg = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready; } catch (e) { SV.fail(e); }
+  if (Notification.permission === 'denied') setState('bad', 'Benachrichtigungen sind blockiert', 'Erlaube sie in den Einstellungen deines Geräts (iPhone: Einstellungen → Mitteilungen → SVEvents) und lade die Seite neu.');
+  else setState('', 'Auf diesem Gerät noch nicht aktiv', 'Tippe auf „Aktivieren“ und erlaube die Mitteilungen.');
+  await refresh();
+
+  $('onBtn').addEventListener('click', () => SV.busy($('onBtn'), async () => {
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { setState('bad', 'Nicht erlaubt', 'Ohne Erlaubnis kann keine Nachricht kommen. Erlaube sie in den Geräte-Einstellungen.'); return; }
+      const key = (await callFn({ action: 'key' })).key;
+      let s = await reg.pushManager.getSubscription();
+      if (s) { /* altes Abo mit anderem Schlüssel verwerfen */ try { await s.unsubscribe(); } catch (e) { /* egal */ } }
+      s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+      const j = s.toJSON();
+      const row = { user_id: ctx.me.id, endpoint: s.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, label: deviceLabel() };
+      const r = await sb.from('push_subscriptions').upsert(row, { onConflict: 'endpoint' });
+      if (r.error) throw r.error;
+      SV.toast('Benachrichtigungen aktiviert');
+      await refresh();
+    } catch (e) { SV.fail(e); }
+  }));
+
+  $('testBtn').addEventListener('click', () => SV.busy($('testBtn'), async () => {
+    try {
+      const r = await callFn({ test: true });
+      SV.toast(r.sent ? 'Test gesendet – die Nachricht müsste gleich erscheinen' : 'Es wurde nichts gesendet. Gerät noch einmal ausschalten und aktivieren.', r.sent ? '' : 'bad');
+      if (r.removed) await refresh();
+    } catch (e) { SV.fail(e); }
+  }));
+
+  async function removeSub(id, endpoint) {
+    const r = await sb.from('push_subscriptions').delete().eq('id', id);
+    if (r.error) return SV.fail(r.error);
+    if (browserSub && browserSub.endpoint === endpoint) { try { await browserSub.unsubscribe(); } catch (e) { /* egal */ } }
+  }
+  $('offBtn').addEventListener('click', () => SV.busy($('offBtn'), async () => {
+    if (mySub) await removeSub(mySub.id, mySub.endpoint);
+    setState('', 'Auf diesem Gerät ausgeschaltet', 'Du bekommst hier keine Nachrichten mehr.');
+    await refresh();
+  }));
+  $('devs').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-rm]'); if (!b) return;
+    const all = await sb.from('push_subscriptions').select('id,endpoint').eq('id', b.dataset.rm).maybeSingle();
+    if (all.data) await removeSub(all.data.id, all.data.endpoint);
+    await refresh();
+  });
+
+  [['pReports', 'on_reports'], ['pRejects', 'on_rejects'], ['pCancels', 'on_cancels']].forEach(([id, col]) => {
+    $(id).addEventListener('change', async () => {
+      if (!mySub) return;
+      const r = await sb.from('push_subscriptions').update({ [col]: $(id).checked }).eq('id', mySub.id);
+      if (r.error) { SV.fail(r.error); $(id).checked = !$(id).checked; return; }
+      mySub[col] = $(id).checked;
+      SV.toast('Gespeichert');
+    });
+  });
+})();
+</script>
+</body>
+</html>

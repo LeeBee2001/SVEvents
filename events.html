@@ -63,6 +63,7 @@
     <div class="dlg-head"><h2 id="typeDlgTitle">Ticketart</h2></div>
     <div class="dlg-body">
       <div class="field"><label for="tyName">Name</label><input id="tyName" required maxlength="80" placeholder="z. B. Vorverkauf, Abendkasse, VIP"></div>
+      <label class="check"><input id="tyFormal" type="checkbox"> Sie-Ansprache in der Ticket-Mail (für Lehrer und Erwachsene)</label>
       <label class="check"><input id="tyAdminOnly" type="checkbox"> Nicht im Verkauf, wird nur von Admins vergeben (z. B. Lehrer, SV)</label>
       <div class="hint" style="margin:-4px 0 14px">Verkäufer sehen diese Ticketart nicht. Es gibt keinen Preis und keinen Verkaufszeitraum.</div>
       <div id="saleFields">
@@ -132,7 +133,7 @@
         '<button class="btn secondary sm" data-act="del-ev" data-id="' + ev.id + '">Löschen</button></div></div>' +
         (ts.length
           ? '<div class="tablewrap"><table class="data"><thead><tr><th>Ticketart</th><th class="right">Preis</th><th>Verkauf</th><th class="right">Limit</th><th>Besonderheiten</th><th></th></tr></thead><tbody>' +
-            ts.map((t) => '<tr><td>' + esc(t.name) + (t.admin_only ? ' <span class="badge warn">nur Admin</span>' : '') + (t.checkin_on_sale ? ' <span class="badge accent">Abendkasse</span>' : '') + '</td><td class="right num">' + (t.admin_only ? '–' : esc(money(t.price))) + '</td><td>' + (t.admin_only ? 'nicht im Verkauf' : esc(saleText(t))) +
+            ts.map((t) => '<tr><td>' + esc(t.name) + (t.admin_only ? ' <span class="badge warn">nur Admin</span>' : '') + (t.formal ? ' <span class="badge">Sie</span>' : '') + (t.checkin_on_sale ? ' <span class="badge accent">Abendkasse</span>' : '') + '</td><td class="right num">' + (t.admin_only ? '–' : esc(money(t.price))) + '</td><td>' + (t.admin_only ? 'nicht im Verkauf' : esc(saleText(t))) +
               '</td><td class="right num">' + (t.type_limit == null ? '–' : t.type_limit) + '</td><td>' +
               (t.counts_to_capacity ? '' : '<span class="badge">zählt nicht zum Limit</span> ') +
               (t.reentry_without_scan ? '<span class="badge accent">Wiedereinlass frei</span>' : '') +
@@ -214,6 +215,7 @@
     $('tyCounts').checked = ty ? ty.counts_to_capacity : true;
     $('tyReentry').checked = ty ? ty.reentry_without_scan : false;
     $('tyAdminOnly').checked = ty ? !!ty.admin_only : false;
+    $('tyFormal').checked = ty ? !!ty.formal : false;
     $('tyCheckin').checked = ty ? !!ty.checkin_on_sale : false;
     $('tyLimit2').value = $('tyLimit').value;
     syncAdminOnly();
@@ -271,6 +273,7 @@
       sale_start: adminOnly ? null : SV.fromLocalInput($('tySaleStart').value),
       sale_end: adminOnly ? null : SV.fromLocalInput($('tySaleEnd').value),
       admin_only: adminOnly,
+      formal: $('tyFormal').checked,
       counts_to_capacity: $('tyCounts').checked,
       reentry_without_scan: $('tyReentry').checked,
       checkin_on_sale: $('tyCheckin').checked

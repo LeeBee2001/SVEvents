@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f3f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<title>Mehrere Benutzer – SVEvents</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="theme.js"></script>
+<link rel="stylesheet" href="style.css">
+<style>
+  .bulk-set { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0 14px; }
+  .bulk-table input, .bulk-table select { min-width: 0; width: 100%; }
+  .bulk-table td { vertical-align: top; padding: 6px 6px; }
+  .bulk-table .pw { font-family: ui-monospace, Menlo, Consolas, monospace; min-width: 130px; }
+  .bulk-table .st { white-space: nowrap; font-size: 13px; padding-top: 14px; }
+  .tpl-list { display: grid; gap: 8px; margin-bottom: 18px; }
+  .tpl-item { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--surface); }
+  .tpl-item .grow { flex: 1; min-width: 0; }
+  .cred-sheet { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4mm; margin-top: 14px; }
+  .cred-card { border: 1.5px dashed var(--line); border-radius: 6px; padding: 12px 14px; background: var(--surface); break-inside: avoid; page-break-inside: avoid; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-content: start; }
+  .cred-card h3 { margin: 0; font-size: 17px; grid-column: 1; }
+  .cred-card .role { grid-column: 1; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .cred-card .qr { grid-column: 2; grid-row: 1 / span 2; }
+  .cred-card dl { grid-column: 1 / -1; margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+  .cred-card dt { color: var(--muted); }
+  .cred-card dd { margin: 0; overflow-wrap: anywhere; }
+  .cred-card .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; }
+  @media (max-width: 700px) { .cred-sheet { grid-template-columns: 1fr; } }
+  @media print {
+    .cred-sheet { margin-top: 0; gap: 4mm; }
+    .cred-card { height: 62mm; box-sizing: border-box; border-color: #666; }
+    .cred-card .qr canvas, .cred-card .qr img { width: 22mm !important; height: 22mm !important; }
+  }
+</style>
+</head>
+<body>
+<main id="content" hidden>
+  <div class="page-head noprint">
+    <div>
+      <h1>Mehrere Benutzer anlegen</h1>
+      <p class="muted">Event, Rechte und Zeitraum einmal festlegen, dann nur noch Namen eintragen. E-Mail und Passwort entstehen automatisch.</p>
+    </div>
+    <div class="actions"><a class="btn secondary" href="benutzer.html">Zurück zu Benutzer</a></div>
+  </div>
+
+  <div id="setupPart" class="noprint">
+    <details class="panel" id="tplPanel" style="margin-bottom:18px">
+      <summary style="cursor:pointer; font-weight:650">Vorlagen verwalten (Zeitfenster und Rechte)</summary>
+      <div style="margin-top:16px">
+        <div class="section-head"><h2>Zeitfenster</h2><button class="btn secondary sm" type="button" id="slotNew">Neu</button></div>
+        <p class="hint" style="margin:-4px 0 10px">Zum Beispiel „Erste Pause“ oder „Schicht 1“. Bestimmt, von wann bis wann der Zugang gilt.</p>
+        <div class="tpl-list" id="slotList"></div>
+        <div class="section-head"><h2>Rechte-Vorlagen</h2><button class="btn secondary sm" type="button" id="tplNew">Neu</button></div>
+        <p class="hint" style="margin:-4px 0 10px">Zum Beispiel „Kasse“ (verkaufen) oder „Einlass“ (scannen), dazu optional Aktionen.</p>
+        <div class="tpl-list" id="tplList"></div>
+      </div>
+    </details>
+
+    <div class="panel" style="margin-bottom:18px">
+      <h2 style="margin-bottom:12px">1. Gilt für alle</h2>
+      <div class="bulk-set">
+        <div class="field"><label for="evSel">Event</label><select id="evSel"></select></div>
+        <div class="field"><label for="tplSel">Rechte</label><select id="tplSel"></select></div>
+        <div class="field"><label for="slotSel">Zeitfenster</label><select id="slotSel"></select></div>
+        <div class="field"><label for="stSel">Station (optional)</label><select id="stSel"></select></div>
+      </div>
+      <div class="hint" id="setHint" style="margin-top:-4px">Neue Zeilen übernehmen diese Auswahl. In jeder Zeile kannst du sie einzeln ändern.</div>
+    </div>
+
+    <div class="panel" style="margin-bottom:18px">
+      <h2 style="margin-bottom:12px">2. Personen</h2>
+      <div class="field">
+        <label for="namesIn">Namen einfügen (einer pro Zeile)</label>
+        <textarea id="namesIn" rows="4" placeholder="Anna Beispiel&#10;Ben Muster"></textarea>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px">
+        <button class="btn secondary" type="button" id="namesAdd">Als Zeilen übernehmen</button>
+        <button class="btn secondary" type="button" id="rowAdd">Leere Zeile</button>
+        <button class="btn secondary" type="button" id="rowsClear">Alle entfernen</button>
+      </div>
+      <div id="rowsBox"></div>
+      <div style="margin-top:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+        <button class="btn lg" type="button" id="createBtn">Benutzer anlegen</button>
+        <span class="muted small" id="createInfo"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultPart" hidden>
+    <div class="page-head noprint" style="margin-top:8px">
+      <div>
+        <h2>Zugangsdaten</h2>
+        <p class="muted" id="resultInfo"></p>
+      </div>
+      <div class="actions">
+        <button class="btn secondary" type="button" id="resCopy">Als Text kopieren</button>
+        <button class="btn" type="button" id="resPrint">Drucken / Als PDF speichern</button>
+        <button class="btn secondary" type="button" id="resMore">Weitere anlegen</button>
+      </div>
+    </div>
+    <div class="notice noprint">Die Passwörter werden nur jetzt angezeigt. Drucke oder kopiere sie, bevor du die Seite verlässt.</div>
+    <div class="cred-sheet" id="credSheet"></div>
+  </div>
+</main>
+
+<dialog id="slotDlg">
+  <form class="dlg" id="slotForm" autocomplete="off">
+    <div class="dlg-head"><h2 id="slotTitle">Zeitfenster</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="slName">Name</label><input id="slName" required maxlength="80" placeholder="z. B. Erste Pause"></div>
+      <div class="field"><label for="slEvent">Event (optional)</label><select id="slEvent"></select><div class="hint">Mit Event erscheint das Zeitfenster nur, wenn dieses Event gewählt ist.</div></div>
+      <div class="grid-2">
+        <div class="field"><label for="slFrom">Von</label><input id="slFrom" type="datetime-local" required></div>
+        <div class="field"><label for="slUntil">Bis</label><input id="slUntil" type="datetime-local" required></div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="left"><button class="btn secondary" type="button" id="slDel">Löschen</button></div>
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="tplDlg">
+  <form class="dlg" id="tplForm" autocomplete="off">
+    <div class="dlg-head"><h2 id="tplTitle">Rechte-Vorlage</h2></div>
+    <div class="dlg-body">
+      <div class="field"><label for="tpName">Name</label><input id="tpName" required maxlength="80" placeholder="z. B. Kasse"></div>
+      <div class="field">
+        <span class="label">Darf im gewählten Event</span>
+        <label class="check"><input id="tpSell" type="checkbox"> Tickets verkaufen (alle Ticketarten)</label>
+        <label class="check"><input id="tpScan" type="checkbox"> Einlass scannen</label>
+      </div>
+      <div class="field"><span class="label">Aktionen, bei denen mitgearbeitet wird</span><div id="tpCamps"></div></div>
+    </div>
+    <div class="dlg-foot">
+      <div class="left"><button class="btn secondary" type="button" id="tpDel">Löschen</button></div>
+      <button class="btn secondary" type="button" data-close>Abbrechen</button>
+      <button class="btn" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+(async function () {
+  const ctx = await SV.start({ page: 'mehrere', roles: ['admin'] });
+  if (!ctx) return;
+  const sb = ctx.sb;
+  const { $, esc, fmt, fmtTime } = SV;
+
+  let events = [], types = [], campaigns = [], stations = [], slots = [], tpls = [], profiles = [];
+  let rows = [];            // {name, email, mailTouched, pw, tpl, slot, station, status}
+  let results = [];
+  let editSlot = null, editTpl = null;
+
+  // ---------- Hilfen ----------
+  function mailFromName(name) {
+    const local = name.trim().toLowerCase()
+      .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, '.').replace(/[^a-z0-9._-]/g, '')
+      .replace(/\.{2,}/g, '.').replace(/^\./, '').replace(/\.$/, '');
+    return local ? local + '@svevents.thgsv' : '';
+  }
+  function genPassword() {
+    const a = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const b = new Uint32Array(12);
+    crypto.getRandomValues(b);
+    let s = '';
+    for (let i = 0; i < 12; i++) { s += a[b[i] % a.length]; if (i === 3 || i === 7) s += '-'; }
+    return s;
+  }
+  async function callAdmin(body) {
+    const r = await sb.functions.invoke('admin-users', { body: body });
+    if (r.error) {
+      let msg = r.error.message || '';
+      try { const j = await r.error.context.json(); if (j && j.error) msg = j.error; } catch (e) { /* keine Details */ }
+      if (/Failed to send|fetch|not found|relay/i.test(msg)) msg = 'Die Funktion „admin-users“ ist nicht erreichbar. Wurde sie in Supabase eingerichtet?';
+      throw new Error(msg);
+    }
+    if (r.data && r.data.error) throw new Error(r.data.error);
+    return r.data;
+  }
+  const slotLabel = (s) => s.name + ' (' + fmt(s.starts_at) + ' – ' + fmtTime(s.ends_at) + ')';
+  const evName = (id) => { const e = events.find((x) => x.id === id); return e ? e.name : ''; };
+  const curEvent = () => $('evSel').value;
+  const takenMails = () => new Set(profiles.map((p) => (p.email || '').toLowerCase()).concat(rows.map((r) => r.email.toLowerCase())));
+
+  function uniqueMail(base, skipRow) {
+    if (!base) return '';
+    const taken = new Set(profiles.map((p) => (p.email || '').toLowerCase()));
+    rows.forEach((r) => { if (r !== skipRow && r.email) taken.add(r.email.toLowerCase()); });
+    if (!taken.has(base)) return base;
+    const [loc, dom] = base.split('@');
+    for (let i = 2; i < 100; i++) { const m = loc + i + '@' + dom; if (!taken.has(m)) return m; }
+    return base;
+  }
+
+  // ---------- Daten ----------
+  async function load() {
+    const res = await Promise.all([
+      SV.loadEvents(),
+      sb.from('ticket_types').select('*'),
+      sb.from('campaigns').select('*').order('created_at', { ascending: false }),
+      sb.from('stations').select('id,event_id,name,kind').order('name'),
+      sb.from('time_slots').select('*').order('starts_at'),
+      sb.from('user_templates').select('*').order('name'),
+      sb.from('profiles').select('id,email')
+    ]);
+    [res[1], res[2], res[3], res[4], res[5], res[6]].forEach((r) => { if (r.error) throw r.error; });
+    events = res[0]; types = res[1].data; campaigns = res[2].data; stations = res[3].data;
+    slots = res[4].data; tpls = res[5].data; profiles = res[6].data;
+    renderAll();
+  }
+
+  function slotsForEvent(evId) { return slots.filter((s) => !s.event_id || s.event_id === evId); }
+
+  function renderTop() {
+    const keepEv = $('evSel').value, keepT = $('tplSel').value, keepS = $('slotSel').value, keepSt = $('stSel').value;
+    $('evSel').innerHTML = '<option value="">Kein Event</option>' + events.map((e) => '<option value="' + e.id + '">' + esc(e.name) + '</option>').join('');
+    if (keepEv && events.some((e) => e.id === keepEv)) $('evSel').value = keepEv;
+    else if (events.length && !keepEv && !renderTop.done) $('evSel').value = events[0].id;
+    renderTop.done = true;
+    $('tplSel').innerHTML = '<option value="">Keine (nur ansehen)</option>' + tpls.map((t) => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('');
+    if (tpls.some((t) => t.id === keepT)) $('tplSel').value = keepT;
+    const sl = slotsForEvent(curEvent());
+    $('slotSel').innerHTML = '<option value="">Unbegrenzt</option>' + sl.map((s) => '<option value="' + s.id + '">' + esc(slotLabel(s)) + '</option>').join('');
+    if (sl.some((s) => s.id === keepS)) $('slotSel').value = keepS;
+    const st = stations.filter((s) => s.event_id === curEvent());
+    $('stSel').innerHTML = '<option value="">Keine</option>' + st.map((s) => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
+    if (st.some((s) => s.id === keepSt)) $('stSel').value = keepSt;
+  }
+
+  function rowSelect(i, key, opts) {
+    return '<select data-i="' + i + '" data-k="' + key + '">' + opts + '</select>';
+  }
+  function renderRows() {
+    if (!rows.length) { $('rowsBox').innerHTML = '<div class="empty"><b>Noch keine Personen</b>Füge oben Namen ein oder lege eine leere Zeile an.</div>'; $('createBtn').disabled = true; $('createInfo').textContent = ''; return; }
+    const sl = slotsForEvent(curEvent());
+    const st = stations.filter((s) => s.event_id === curEvent());
+    const tplOpts = (v) => '<option value="">Keine (nur ansehen)</option>' + tpls.map((t) => '<option value="' + t.id + '"' + (t.id === v ? ' selected' : '') + '>' + esc(t.name) + '</option>').join('');
+    const slotOpts = (v) => '<option value="">Unbegrenzt</option>' + sl.map((s) => '<option value="' + s.id + '"' + (s.id === v ? ' selected' : '') + '>' + esc(slotLabel(s)) + '</option>').join('');
+    const stOpts = (v) => '<option value="">Keine</option>' + st.map((s) => '<option value="' + s.id + '"' + (s.id === v ? ' selected' : '') + '>' + esc(s.name) + '</option>').join('');
+    $('rowsBox').innerHTML = '<div class="tablewrap"><table class="data bulk-table"><thead><tr><th>Name</th><th>E-Mail</th><th>Passwort</th><th>Rechte</th><th>Zeitfenster</th><th>Station</th><th></th></tr></thead><tbody>' +
+      rows.map((r, i) => '<tr><td><input data-i="' + i + '" data-k="name" value="' + esc(r.name) + '" maxlength="80" aria-label="Name"></td>' +
+        '<td><input data-i="' + i + '" data-k="email" value="' + esc(r.email) + '" aria-label="E-Mail"></td>' +
+        '<td><input class="pw" data-i="' + i + '" data-k="pw" value="' + esc(r.pw) + '" aria-label="Passwort"></td>' +
+        '<td>' + rowSelect(i, 'tpl', tplOpts(r.tpl)) + '</td><td>' + rowSelect(i, 'slot', slotOpts(r.slot)) + '</td><td>' + rowSelect(i, 'station', stOpts(r.station)) + '</td>' +
+        '<td class="st">' + (r.status ? esc(r.status) : '<button class="btn secondary sm" type="button" data-del="' + i + '" aria-label="Zeile entfernen">✕</button>') + '</td></tr>').join('') +
+      '</tbody></table></div>';
+    $('createBtn').disabled = false;
+    $('createInfo').textContent = rows.length + (rows.length === 1 ? ' Benutzer wird' : ' Benutzer werden') + ' angelegt.';
+  }
+
+  function renderLists() {
+    $('slotList').innerHTML = slots.length ? slots.map((s) => '<div class="tpl-item"><div class="grow"><b>' + esc(s.name) + '</b><div class="muted small">' +
+      esc(fmt(s.starts_at) + ' – ' + fmtTime(s.ends_at)) + (s.event_id ? ' · ' + esc(evName(s.event_id)) : ' · für alle Events') + '</div></div>' +
+      '<button class="btn secondary sm" type="button" data-slot="' + s.id + '">Bearbeiten</button></div>').join('') : '<p class="muted small">Noch keine Zeitfenster.</p>';
+    $('tplList').innerHTML = tpls.length ? tpls.map((t) => {
+      const parts = [t.sell ? 'Verkauf' : '', t.scan ? 'Einlass' : '', t.campaign_ids.length ? t.campaign_ids.length + (t.campaign_ids.length === 1 ? ' Aktion' : ' Aktionen') : ''].filter(Boolean);
+      return '<div class="tpl-item"><div class="grow"><b>' + esc(t.name) + '</b><div class="muted small">' + esc(parts.join(', ') || 'nur ansehen') + '</div></div>' +
+        '<button class="btn secondary sm" type="button" data-tpl="' + t.id + '">Bearbeiten</button></div>';
+    }).join('') : '<p class="muted small">Noch keine Rechte-Vorlagen.</p>';
+  }
+
+  function renderAll() { renderTop(); renderRows(); renderLists(); }
+
+  // ---------- Zeilen ----------
+  function newRow(name) {
+    const r = { name: name || '', email: '', pw: genPassword(), tpl: $('tplSel').value, slot: $('slotSel').value, station: $('stSel').value, status: '' };
+    rows.push(r);
+    if (name) r.email = uniqueMail(mailFromName(name), r);
+    return r;
+  }
+  $('namesAdd').addEventListener('click', () => {
+    const names = $('namesIn').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    if (!names.length) return SV.toast('Trage mindestens einen Namen ein.', 'bad');
+    names.forEach((n) => newRow(n));
+    $('namesIn').value = '';
+    renderRows();
+  });
+  $('rowAdd').addEventListener('click', () => { newRow(''); renderRows(); });
+  $('rowsClear').addEventListener('click', () => { rows = []; renderRows(); });
+  $('rowsBox').addEventListener('input', (e) => {
+    const t = e.target, i = Number(t.dataset.i), k = t.dataset.k;
+    if (isNaN(i) || !k) return;
+    const r = rows[i];
+    r[k] = t.value;
+    if (k === 'name' && !r.mailTouched) { r.email = uniqueMail(mailFromName(r.name), r); const m = t.closest('tr').querySelector('[data-k="email"]'); if (m) m.value = r.email; }
+    if (k === 'email') r.mailTouched = true;
+  });
+  $('rowsBox').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-del]');
+    if (!b) return;
+    rows.splice(Number(b.dataset.del), 1);
+    renderRows();
+  });
+  $('evSel').addEventListener('change', () => {
+    // Zeitfenster/Stationen gehören zum Event: Auswahl zurücksetzen
+    $('slotSel').value = ''; $('stSel').value = '';
+    rows.forEach((r) => { if (!slotsForEvent(curEvent()).some((s) => s.id === r.slot)) r.slot = ''; if (!stations.some((s) => s.id === r.station && s.event_id === curEvent())) r.station = ''; });
+    renderTop(); renderRows();
+  });
+  // Standard-Auswahl oben: auch für alle schon vorhandenen Zeilen übernehmen
+  [['tplSel', 'tpl'], ['slotSel', 'slot'], ['stSel', 'station']].forEach(([id, key]) => {
+    $(id).addEventListener('change', () => { rows.forEach((r) => { if (!r.status) r[key] = $(id).value; }); renderRows(); });
+  });
+
+  // ---------- Anlegen ----------
+  function tplOf(r) { return tpls.find((t) => t.id === r.tpl); }
+  function validate() {
+    const seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i], n = i + 1;
+      if (!r.name.trim()) return 'Zeile ' + n + ': Name fehlt.';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email.trim())) return 'Zeile ' + n + ' (' + r.name + '): Ungültige E-Mail-Adresse.';
+      if (seen.has(r.email.trim().toLowerCase())) return 'Zeile ' + n + ' (' + r.name + '): E-Mail kommt doppelt vor.';
+      seen.add(r.email.trim().toLowerCase());
+      if (profiles.some((p) => (p.email || '').toLowerCase() === r.email.trim().toLowerCase())) return 'Zeile ' + n + ' (' + r.name + '): Diese E-Mail gibt es schon.';
+      if (r.pw.length < 8) return 'Zeile ' + n + ' (' + r.name + '): Das Passwort braucht mindestens 8 Zeichen.';
+      const t = tplOf(r);
+      if (t && (t.sell || t.scan) && !curEvent()) return 'Zeile ' + n + ' (' + r.name + '): Für Verkauf oder Einlass brauchst du oben ein Event.';
+      if (r.station && !r.slot) return 'Zeile ' + n + ' (' + r.name + '): Für eine Station brauchst du ein Zeitfenster (daraus entsteht die Schicht).';
+    }
+    return '';
+  }
+
+  $('createBtn').addEventListener('click', async () => {
+    const err = validate();
+    if (err) return SV.toast(err, 'bad');
+    const ok = await SV.confirmBox(rows.length + (rows.length === 1 ? ' Benutzer wird' : ' Benutzer werden') + ' angelegt.', { title: 'Jetzt anlegen?', ok: 'Anlegen' });
+    if (!ok) return;
+    const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+    const evId = curEvent();
+    results = [];
+    await SV.busy($('createBtn'), async () => {
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        r.status = 'Wird angelegt …'; renderRows();
+        const t = tplOf(r), sl = slots.find((s) => s.id === r.slot), stn = stations.find((s) => s.id === r.station);
+        let id = null, email = r.email.trim().toLowerCase(), warn = '';
+        try {
+          for (let tries = 0; tries < 5; tries++) {
+            try {
+              const res = await callAdmin({ action: 'create', email: email, password: r.pw, name: r.name.trim(), role: 'seller',
+                valid_from: sl ? sl.starts_at : null, valid_until: sl ? sl.ends_at : null });
+              id = res.id; break;
+            } catch (e) {
+              if (/schon vergeben/i.test(e.message) && tries < 4) { const [l, d] = email.split('@'); email = l.replace(/\d+$/, '') + (tries + 2) + '@' + d; continue; }
+              throw e;
+            }
+          }
+        } catch (e) { r.status = 'Fehler: ' + e.message; renderRows(); results.push({ failed: true, name: r.name, error: e.message }); continue; }
+        try {
+          if (t && evId) {
+            if (t.scan) { const x = await sb.from('event_access').insert({ user_id: id, event_id: evId }); if (x.error) throw x.error; }
+            if (t.sell) {
+              const ids = types.filter((y) => y.event_id === evId && !y.admin_only).map((y) => ({ user_id: id, ticket_type_id: y.id }));
+              if (ids.length) { const x = await sb.from('type_access').insert(ids); if (x.error) throw x.error; }
+            }
+          }
+          if (t && t.campaign_ids.length) {
+            const x = await sb.from('campaign_access').insert(t.campaign_ids.map((c) => ({ user_id: id, campaign_id: c }))); if (x.error) throw x.error;
+          }
+          if (stn && sl) {
+            const x = await sb.from('shifts').insert({ station_id: stn.id, user_id: id, starts_at: sl.starts_at, ends_at: sl.ends_at, note: sl.name }); if (x.error) throw x.error;
+          }
+        } catch (e) { warn = 'Rechte/Schicht nicht gesetzt: ' + SV.errText(e); }
+        r.status = warn ? 'Angelegt, aber: ' + warn : 'Angelegt ✓';
+        results.push({ name: r.name.trim(), email: email, password: r.pw, tpl: t ? t.name : 'nur ansehen', slot: sl ? slotLabel(sl) : 'unbegrenzt', station: stn ? stn.name : '', event: evId ? evName(evId) : '', warn: warn, base: base });
+        renderRows();
+      }
+    });
+    showResults();
+    try { const p = await sb.from('profiles').select('id,email'); if (!p.error) profiles = p.data; } catch (e) { /* egal */ }
+  });
+
+  // ---------- Ergebnis: Text und Druck ----------
+  function resultText() {
+    const ok = results.filter((r) => !r.failed);
+    if (!ok.length) return '';
+    return 'SVEvents – Zugangsdaten\nAdresse: ' + ok[0].base + '\n\n' + ok.map((r) =>
+      r.name + (r.tpl ? ' (' + r.tpl + ')' : '') + '\nE-Mail: ' + r.email + '\nPasswort: ' + r.password +
+      '\nGültig: ' + r.slot + (r.station ? '\nStation: ' + r.station : '')).join('\n\n');
+  }
+  function showResults() {
+    const ok = results.filter((r) => !r.failed), bad = results.filter((r) => r.failed);
+    $('resultPart').hidden = false;
+    $('resultInfo').textContent = ok.length + (ok.length === 1 ? ' Benutzer angelegt' : ' Benutzer angelegt') + (bad.length ? ', ' + bad.length + ' fehlgeschlagen (siehe Liste oben)' : '') + '.';
+    $('credSheet').innerHTML = ok.map((r, i) => '<div class="cred-card"><h3>' + esc(r.name) + '</h3>' +
+      '<div class="role">' + esc([r.event, r.tpl, r.station].filter(Boolean).join(' · ')) + '</div><div class="qr" id="qr' + i + '"></div>' +
+      '<dl><dt>Adresse</dt><dd>' + esc(r.base.replace(/^https?:\/\//, '')) + '</dd><dt>E-Mail</dt><dd>' + esc(r.email) + '</dd><dt>Passwort</dt><dd class="mono">' + esc(r.password) + '</dd>' +
+      '<dt>Gültig</dt><dd>' + esc(r.slot) + '</dd></dl></div>').join('');
+    ok.forEach((r, i) => { try { SV.renderQR($('qr' + i), r.base, 76); } catch (e) { /* QR optional */ } });
+    $('resultPart').scrollIntoView({ behavior: 'smooth' });
+  }
+  $('resCopy').addEventListener('click', () => SV.copyText(resultText()));
+  $('resPrint').addEventListener('click', () => window.print());
+  $('resMore').addEventListener('click', () => {
+    rows = rows.filter((r) => /Fehler/.test(r.status));
+    rows.forEach((r) => { r.status = ''; });
+    results = [];
+    $('resultPart').hidden = true; $('credSheet').innerHTML = '';
+    renderRows(); window.scrollTo(0, 0);
+  });
+
+  // ---------- Zeitfenster bearbeiten ----------
+  SV.$$('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
+  function openSlot(s) {
+    editSlot = s || null;
+    $('slotTitle').textContent = s ? 'Zeitfenster bearbeiten' : 'Neues Zeitfenster';
+    $('slName').value = s ? s.name : '';
+    $('slEvent').innerHTML = '<option value="">Für alle Events</option>' + events.map((e) => '<option value="' + e.id + '">' + esc(e.name) + '</option>').join('');
+    $('slEvent').value = s ? (s.event_id || '') : curEvent();
+    const ev = events.find((e) => e.id === $('slEvent').value);
+    $('slFrom').value = s ? SV.toLocalInput(s.starts_at) : (ev && ev.starts_at ? SV.toLocalInput(ev.starts_at) : '');
+    $('slUntil').value = s ? SV.toLocalInput(s.ends_at) : '';
+    $('slDel').hidden = !s;
+    $('slotDlg').showModal(); $('slName').focus();
+  }
+  $('slotNew').addEventListener('click', () => openSlot(null));
+  $('slotList').addEventListener('click', (e) => { const b = e.target.closest('[data-slot]'); if (b) openSlot(slots.find((s) => s.id === b.dataset.slot)); });
+  $('slotForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const from = SV.fromLocalInput($('slFrom').value), until = SV.fromLocalInput($('slUntil').value);
+    if (!from || !until || until <= from) return SV.toast('„Bis“ muss nach „Von“ liegen.', 'bad');
+    const rec = { name: $('slName').value.trim(), event_id: $('slEvent').value || null, starts_at: from, ends_at: until };
+    await SV.busy(e.submitter, async () => {
+      const r = editSlot ? await sb.from('time_slots').update(rec).eq('id', editSlot.id) : await sb.from('time_slots').insert(rec);
+      if (r.error) return SV.fail(r.error);
+      $('slotDlg').close(); SV.toast('Gespeichert');
+      try { await load(); } catch (x) { SV.fail(x); }
+    });
+  });
+  $('slDel').addEventListener('click', async () => {
+    if (!editSlot || !(await SV.confirmBox('„' + editSlot.name + '“ wird gelöscht. Bereits angelegte Benutzer behalten ihren Zeitraum.', { title: 'Zeitfenster löschen?', ok: 'Löschen', danger: true }))) return;
+    const r = await sb.from('time_slots').delete().eq('id', editSlot.id);
+    if (r.error) return SV.fail(r.error);
+    $('slotDlg').close(); try { await load(); } catch (x) { SV.fail(x); }
+  });
+
+  // ---------- Rechte-Vorlagen bearbeiten ----------
+  function openTpl(t) {
+    editTpl = t || null;
+    $('tplTitle').textContent = t ? 'Rechte-Vorlage bearbeiten' : 'Neue Rechte-Vorlage';
+    $('tpName').value = t ? t.name : '';
+    $('tpSell').checked = t ? t.sell : false;
+    $('tpScan').checked = t ? t.scan : false;
+    $('tpCamps').innerHTML = campaigns.length ? campaigns.map((c) => '<label class="check"><input type="checkbox" data-c="' + c.id + '"' + (t && t.campaign_ids.indexOf(c.id) >= 0 ? ' checked' : '') + '> ' + esc(c.name) + '</label>').join('')
+      : '<p class="muted small">Noch keine Aktionen.</p>';
+    $('tpDel').hidden = !t;
+    $('tplDlg').showModal(); $('tpName').focus();
+  }
+  $('tplNew').addEventListener('click', () => openTpl(null));
+  $('tplList').addEventListener('click', (e) => { const b = e.target.closest('[data-tpl]'); if (b) openTpl(tpls.find((t) => t.id === b.dataset.tpl)); });
+  $('tplForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rec = { name: $('tpName').value.trim(), sell: $('tpSell').checked, scan: $('tpScan').checked,
+      campaign_ids: SV.$$('#tpCamps [data-c]').filter((c) => c.checked).map((c) => c.dataset.c) };
+    await SV.busy(e.submitter, async () => {
+      const r = editTpl ? await sb.from('user_templates').update(rec).eq('id', editTpl.id) : await sb.from('user_templates').insert(rec);
+      if (r.error) return SV.fail(r.error);
+      $('tplDlg').close(); SV.toast('Gespeichert');
+      try { await load(); } catch (x) { SV.fail(x); }
+    });
+  });
+  $('tpDel').addEventListener('click', async () => {
+    if (!editTpl || !(await SV.confirmBox('„' + editTpl.name + '“ wird gelöscht. Bereits angelegte Benutzer behalten ihre Rechte.', { title: 'Vorlage löschen?', ok: 'Löschen', danger: true }))) return;
+    const r = await sb.from('user_templates').delete().eq('id', editTpl.id);
+    if (r.error) return SV.fail(r.error);
+    $('tplDlg').close(); try { await load(); } catch (x) { SV.fail(x); }
+  });
+
+  try { await load(); } catch (e) { SV.fail(e); }
+})();
+</script>
+</body>
+</html>
