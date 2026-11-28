@@ -107,6 +107,7 @@
 </dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
 <script>
@@ -316,6 +317,7 @@
   async function drawMaster() {
     const logo = mk.ev.logo_url ? await SV.loadLogo(mk.ev.logo_url) : null;
     const th = SV.themeOf(mk.ev, logo);
+    mk.theme = th;
     const c = SV.masterPng({ token: mk.token, event: mk.ev.name, theme: th });
     const p = $('mkPrev'); p.getContext('2d').drawImage(c, 0, 0);
   }
@@ -328,7 +330,7 @@
     await drawMaster();
     $('masterDlg').showModal();
   }
-  $('mkSave').addEventListener('click', () => SV.saveMasterPng({ token: mk.token, event: mk.ev.name, theme: SV.themeOf(mk.ev, null) }));
+  $('mkSave').addEventListener('click', () => SV.saveMasterPng({ token: mk.token, event: mk.ev.name, theme: mk.theme }));
   $('mkPrint').addEventListener('click', () => {
     const url = $('mkPrev').toDataURL('image/png');
     const w = window.open('', '_blank');

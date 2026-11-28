@@ -418,7 +418,7 @@
     const style = th.style;
     const W = 1200, H = 520, PAD = 36;
     const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
-    const GOLD = '#b8924a', GOLD_LIGHT = '#d9bb7a', GOLD_INK = '#2b2111';
+    const GOLD = '#cd9314', GOLD_LIGHT = '#e3b04a', GOLD_INK = '#2b1d03';
     const dark = style === 'elegant';
     const P = dark
       ? { page: '#0a0b0f', card: '#14161c', line: '#2a2e38', muted: '#a3aab8', text: '#f4f5f7', tear: '#3a3f4b', mono: '#7c8494' }
@@ -433,17 +433,21 @@
       while (s.length > 1 && g.measureText(s).width > mw) s = s.slice(0, -1);
       return s === String(text || '') ? s : s.trim() + '…';
     };
-    // Schlüssel-Symbol im Stil von SF Symbols (key.fill): runder Kopf mit Loch, gerader Schaft, zwei Zähne.
-    // (x, y) = Mittelpunkt des Kopfes, Schaft zeigt nach rechts, s = Größe des Kopfdurchmessers.
-    const keyIcon = (x, y, s, fill) => {
-      const r = s / 2, sh = s * 0.2, len = s * 2.1;
-      g.beginPath();
-      g.arc(x, y, r, 0, Math.PI * 2);
-      g.moveTo(x + r * 0.42 + r * 0.01, y); g.arc(x, y, r * 0.38, 0, Math.PI * 2, true);
-      g.fillStyle = fill; g.fill('evenodd');
-      rr(x + r * 0.7, y - sh / 2, len, sh, sh / 2); g.fill();
-      rr(x + r * 0.7 + len * 0.62, y, sh * 0.95, s * 0.36, sh * 0.3); g.fill();
-      rr(x + r * 0.7 + len * 0.86, y, sh * 0.95, s * 0.28, sh * 0.3); g.fill();
+    // Schlüssel: SF-Symbol „key.horizontal“. (x, y) = linke Kante, vertikale Mitte; w = Breite in Pixeln.
+    const KEY = new Path2D('M11.0352-38.2812C9.47266-36.4746 9.22852-33.9355 10.9863-32.2266L22.8027-20.4102C24.5117-18.6523 27.1973-18.75 28.9062-20.459L34.375-25.9277L42.627-17.7246C44.2871-16.0156 46.9727-16.0645 48.7305-17.7734L56.1523-25.1465C61.3281-14.9414 69.9707-9.13086 80.127-9.13086C94.5801-9.13086 106.201-20.8008 106.201-35.2539C106.201-49.7559 94.6289-61.377 80.127-61.377C69.8242-61.377 60.5957-55.5176 56.3477-46.1914L20.4102-46.1914C18.9941-46.1914 17.3828-45.8008 16.3574-44.5312ZM17.8711-35.2539L21.7773-39.1602L61.377-39.1602C63.2812-48.1445 70.9961-54.3945 80.127-54.3945C90.6738-54.3945 99.1699-45.8496 99.1699-35.2539C99.1699-24.6582 90.6738-16.1621 80.127-16.1621C71.0938-16.1621 63.2812-22.4609 61.2793-31.4941L52.4414-31.4941L45.6055-24.6582L38.0371-32.3242L30.8105-32.3242L25.8789-27.3438ZM81.0547-35.2539C81.0547-31.7383 83.8867-28.9062 87.4023-28.9062C90.8691-28.9062 93.7012-31.7383 93.7012-35.2539C93.7012-38.8184 90.8691-41.5527 87.4023-41.5527C83.8867-41.5527 81.0547-38.7695 81.0547-35.2539Z');
+    const keyIcon = (x, y, w, fill) => {
+      const k = w / 97;                       // Symbolbreite ist rund 97 Einheiten (9,2 bis 106,2)
+      g.save(); g.translate(x - 9.2 * k, y + 35.25 * k); g.scale(k, k);
+      g.fillStyle = fill; g.fill(KEY, 'evenodd'); g.restore();
+    };
+    // Logo (Seitenverhältnis bleibt erhalten), wie beim normalen Ticket
+    const lg = th.logo;
+    const drawLogo = (x, y, maxW, maxH, alignRight) => {
+      if (!lg) return 0;
+      const k = Math.min(maxW / lg.naturalWidth, maxH / lg.naturalHeight, 1.6);
+      const w = lg.naturalWidth * k, h = lg.naturalHeight * k;
+      try { g.drawImage(lg, alignRight ? x - w : x, y + (maxH - h) / 2, w, h); } catch (e) { return 0; }
+      return w;
     };
 
     g.fillStyle = P.page; g.fillRect(0, 0, W, H);
@@ -469,19 +473,27 @@
 
     const left = cx + 52 + (dark ? 8 : 0), maxW = sx - left - 40;
     g.textBaseline = 'alphabetic';
-    let evBase = cy + 88, nameBase = cy + 200;
+    let nameBase = cy + 200;
     if (style === 'modern') {
+      const lw = drawLogo(sx - 36, cy + 24, 190, headerH - 48, true);
       g.fillStyle = GOLD_INK; g.font = '700 38px ' + FONT;
-      g.fillText(wrap1(t.event, '700 38px ' + FONT, maxW - 90), left, cy + headerH / 2 + 14);
-      keyIcon(sx - 190, cy + headerH / 2, 40, GOLD_INK);
+      g.fillText(wrap1(t.event, '700 38px ' + FONT, maxW - (lw ? lw + 16 : 0)), left, cy + headerH / 2 + 14);
       nameBase = cy + headerH + 110;
     } else {
+      let lw = 0;
+      if (style === 'classic' && lg) {
+        // Plakette in der Eventfarbe, damit auch ein weißes Logo auf der weißen Karte sichtbar bleibt
+        const k0 = Math.min(170 / lg.naturalWidth, 56 / lg.naturalHeight, 1.6);
+        const pw = lg.naturalWidth * k0 + 28, ph = 56 + 20;
+        g.fillStyle = mix(th.c1, th.c2, 0.5); rr(left, cy + 34, pw, ph, 14); g.fill();
+        lw = drawLogo(left + 14, cy + 44, 170, 56, false) + 28;
+      } else lw = drawLogo(left, cy + 44, 170, 56, false);
       g.fillStyle = dark ? GOLD_LIGHT : sub; g.font = '500 30px ' + FONT;
-      g.fillText(wrap1(t.event, '500 30px ' + FONT, maxW), left, evBase);
+      g.fillText(wrap1(t.event, '500 30px ' + FONT, maxW - (lw ? lw + 20 : 0)), left + (lw ? lw + 20 : 0), cy + 88);
     }
     g.fillStyle = ink; g.font = '700 74px ' + FONT;
     g.fillText('Master Key', left, nameBase);
-    if (style !== 'modern') keyIcon(left + 22, cy + ch - 84, 46, dark ? GOLD_LIGHT : (style === 'strip' ? GOLD_INK : GOLD));
+    keyIcon(left, cy + ch - 86, 110, dark ? GOLD_LIGHT : (style === 'strip' ? GOLD_INK : GOLD));
 
     // QR-Code rechts, wie beim normalen Ticket
     const tmp = document.createElement('div');
